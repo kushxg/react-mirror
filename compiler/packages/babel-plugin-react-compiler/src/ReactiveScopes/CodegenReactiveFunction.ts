@@ -48,7 +48,7 @@ import {printIdentifier, printPlace} from '../HIR/PrintHIR';
 import {eachPatternOperand} from '../HIR/visitors';
 import {Err, Ok, Result} from '../Utils/Result';
 import {GuardKind} from '../Utils/RuntimeDiagnosticConstants';
-import {assertExhaustive} from '../Utils/utils';
+import {assertExhaustive, hasOwnProperty} from '../Utils/utils';
 import {buildReactiveFunction} from './BuildReactiveFunction';
 import {SINGLE_CHILD_FBT_TAGS} from './MemoizeFbtAndMacroOperandsInSameScope';
 import {ReactiveFunctionVisitor, visitReactiveFunction} from './visitors';
@@ -373,6 +373,8 @@ function codegenReactiveFunction(
 
   const countMemoBlockVisitor = new CountMemoBlockVisitor(fn.env);
   visitReactiveFunction(fn, countMemoBlockVisitor, undefined);
+
+  setMissingLocationsToNull(body);
 
   return Ok({
     type: 'CodegenFunction',
@@ -1291,7 +1293,11 @@ function codegenInstructionNullable(
           suggestions: null,
         });
         return createVariableDeclaration(instr.loc, 'const', [
-          t.variableDeclarator(codegenLValue(cx, lvalue), value),
+          createVariableDeclarator(
+            lvalue.kind === 'Identifier' ? lvalue.identifier.loc : null,
+            codegenLValue(cx, lvalue),
+            value,
+          ),
         ]);
       }
       case InstructionKind.Function: {
@@ -1331,7 +1337,11 @@ function codegenInstructionNullable(
           suggestions: null,
         });
         return createVariableDeclaration(instr.loc, 'let', [
-          t.variableDeclarator(codegenLValue(cx, lvalue), value),
+          createVariableDeclarator(
+            lvalue.kind === 'Identifier' ? lvalue.identifier.loc : null,
+            codegenLValue(cx, lvalue),
+            value,
+          ),
         ]);
       }
       case InstructionKind.Reassign: {
@@ -1341,7 +1351,8 @@ function codegenInstructionNullable(
           loc: instr.value.loc,
           suggestions: null,
         });
-        const expr = t.assignmentExpression(
+        const expr = createAssignmentExpression(
+          instr.loc,
           '=',
           codegenLValue(cx, lvalue),
           value,
@@ -1544,6 +1555,8 @@ const createBinaryExpression = withLoc(t.binaryExpression);
 const createExpressionStatement = withLoc(t.expressionStatement);
 const _createLabelledStatement = withLoc(t.labeledStatement);
 const createVariableDeclaration = withLoc(t.variableDeclaration);
+const createVariableDeclarator = withLoc(t.variableDeclarator);
+const createAssignmentExpression = withLoc(t.assignmentExpression);
 const createFunctionDeclaration = withLoc(t.functionDeclaration);
 const _createWhileStatement = withLoc(t.whileStatement);
 const createTaggedTemplateExpression = withLoc(t.taggedTemplateExpression);
@@ -2683,4 +2696,39 @@ function compareScopeDeclaration(
   if (aName < bName) return -1;
   else if (aName > bName) return 1;
   else return 0;
+}
+
+function setMissingLocationsToNull(ast: any): void {
+  if (Array.isArray(ast)) {
+    ast.forEach(item => setMissingLocationsToNull(item));
+    return;
+  } else if (
+    ast == null ||
+    typeof ast !== 'object' ||
+    typeof ast['type'] !== 'string'
+  ) {
+    return;
+  }
+  if (ast['loc'] == null) {
+    ast['loc'] = {
+      start: {line: null, column: null, index: null},
+      end: {line: null, column: null, index: null},
+      filename: null,
+      identifierName: null,
+    };
+  }
+  for (const key in ast) {
+    if (!hasOwnProperty(ast, key)) {
+      continue;
+    }
+    const value = ast[key];
+    if (typeof value !== 'object') {
+      /*
+       * We handle this above too, but avoid extra function calls in the majority of
+       * cases where we're traversing an AST node's properties
+       */
+      continue;
+    }
+    setMissingLocationsToNull(ast[key]);
+  }
 }
