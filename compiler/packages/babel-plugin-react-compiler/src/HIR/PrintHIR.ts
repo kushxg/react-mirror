@@ -546,12 +546,23 @@ export function printInstructionValue(instrValue: ReactiveValue): string {
       const effects =
         instrValue.loweredFunc.func.effects
           ?.map(effect => {
-            if (effect.kind === 'ContextMutation') {
-              return `ContextMutation places=[${[...effect.places]
-                .map(place => printPlace(place))
-                .join(', ')}] effect=${effect.effect}`;
-            } else {
-              return `GlobalMutation`;
+            switch (effect.kind) {
+              case 'ContextMutation': {
+                return `ContextMutation places=[${[...effect.places]
+                  .map(place => printPlace(place))
+                  .join(', ')}] effect=${effect.effect}`;
+              }
+              case 'GlobalMutation': {
+                return 'GlobalMutation';
+              }
+              case 'ReactMutation': {
+                return 'ReactMutation';
+              }
+              case 'CaptureEffect': {
+                return `CaptureEffect places=[${[...effect.places]
+                  .map(place => printPlace(place))
+                  .join(', ')}]`;
+              }
             }
           })
           .join(', ') ?? '';
@@ -720,7 +731,7 @@ function isMutable(range: MutableRange): boolean {
 }
 
 const DEBUG_MUTABLE_RANGES = false;
-function printMutableRange(identifier: Identifier): string {
+export function printMutableRange(identifier: Identifier): string {
   if (DEBUG_MUTABLE_RANGES) {
     // if debugging, print both the identifier and scope range if they differ
     const range = identifier.mutableRange;
