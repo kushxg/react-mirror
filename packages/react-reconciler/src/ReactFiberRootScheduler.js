@@ -20,11 +20,13 @@ import {
   enableComponentPerformanceTrack,
   enableYieldingBeforePassive,
   enableGestureTransition,
+  enableDefaultTransitionIndicator,
 } from 'shared/ReactFeatureFlags';
 import {
   NoLane,
   NoLanes,
   SyncLane,
+  DefaultLane,
   getHighestPriorityLane,
   getNextLanes,
   includesSyncLane,
@@ -78,6 +80,10 @@ import {
   resetNestedUpdateFlag,
   syncNestedUpdateFlag,
 } from './ReactProfilerTimer';
+import {peekEntangledActionLane} from './ReactFiberAsyncAction';
+
+import noop from 'shared/noop';
+import reportGlobalError from 'shared/reportGlobalError';
 
 // A linked list of all the roots with pending work. In an idiomatic app,
 // there's only a single root, but we do support multi root apps, hence this
@@ -256,8 +262,14 @@ function processRootScheduleInMicrotask() {
       // render it synchronously anyway. We do this during a popstate event to
       // preserve the scroll position of the previous page.
       syncTransitionLanes = currentEventTransitionLane;
+    } else if (enableDefaultTransitionIndicator) {
+      // If we have a Transition scheduled by this event it might be paired
+      // with Default lane scheduled loading indicators. To unbatch it from
+      // other events later on, flush it early to determine whether it
+      // rendered an indicator. This ensures that setState in default priority
+      // event doesn't trigger onDefaultTransitionIndicator.
+      syncTransitionLanes = DefaultLane;
     }
-    currentEventTransitionLane = NoLane;
   }
 
   const currentTime = now();
@@ -314,6 +326,34 @@ function processRootScheduleInMicrotask() {
   // completes.
   if (!hasPendingCommitEffects()) {
     flushSyncWorkAcrossRoots_impl(syncTransitionLanes, false);
+  }
+
+  if (currentEventTransitionLane !== NoLane) {
+    // Reset Event Transition Lane so that we allocate a new one next time.
+    currentEventTransitionLane = NoLane;
+    startDefaultTransitionIndicatorIfNeeded();
+  }
+}
+
+function startDefaultTransitionIndicatorIfNeeded() {
+  if (!enableDefaultTransitionIndicator) {
+    return;
+  }
+  // Check all the roots if there are any new indicators needed.
+  let root = firstScheduledRoot;
+  while (root !== null) {
+    if (root.indicatorLanes !== NoLanes && root.pendingIndicator === null) {
+      // We have new indicator lanes that requires a loading state. Start the
+      // default transition indicator.
+      try {
+        const onDefaultTransitionIndicator = root.onDefaultTransitionIndicator;
+        root.pendingIndicator = onDefaultTransitionIndicator() || noop;
+      } catch (x) {
+        root.pendingIndicator = noop;
+        reportGlobalError(x);
+      }
+    }
+    root = root.next;
   }
 }
 
@@ -645,11 +685,28 @@ export function requestTransitionLane(
   // over. Our heuristic for that is whenever we enter a concurrent work loop.
   if (currentEventTransitionLane === NoLane) {
     // All transitions within the same event are assigned the same lane.
-    currentEventTransitionLane = claimNextTransitionLane();
+    const actionScopeLane = peekEntangledActionLane();
+    currentEventTransitionLane =
+      actionScopeLane !== NoLane
+        ? // We're inside an async action scope. Reuse the same lane.
+          actionScopeLane
+        : // We may or may not be inside an async action scope. If we are, this
+          // is the first update in that scope. Either way, we need to get a
+          // fresh transition lane.
+          claimNextTransitionLane();
   }
   return currentEventTransitionLane;
 }
 
 export function didCurrentEventScheduleTransition(): boolean {
   return currentEventTransitionLane !== NoLane;
+}
+
+export function markIndicatorHandled(root: FiberRoot): void {
+  if (enableDefaultTransitionIndicator) {
+    // The current transition event rendered a synchronous loading state.
+    // Clear it from the indicator lanes. We don't need to show a separate
+    // loading state for this lane.
+    root.indicatorLanes &= ~currentEventTransitionLane;
+  }
 }

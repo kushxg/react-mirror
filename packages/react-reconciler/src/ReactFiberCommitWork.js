@@ -20,6 +20,7 @@ import type {
 import type {Fiber, FiberRoot} from './ReactInternalTypes';
 import type {Lanes} from './ReactFiberLane';
 import {
+  includesLoadingIndicatorLanes,
   includesOnlySuspenseyCommitEligibleLanes,
   includesOnlyViewTransitionEligibleLanes,
 } from './ReactFiberLane';
@@ -59,6 +60,8 @@ import {
   enableComponentPerformanceTrack,
   enableViewTransition,
   enableFragmentRefs,
+  enableEagerAlternateStateNodeCleanup,
+  enableDefaultTransitionIndicator,
 } from 'shared/ReactFeatureFlags';
 import {
   FunctionComponent,
@@ -267,13 +270,16 @@ import {
 } from './ReactFiberCommitViewTransitions';
 import {
   viewTransitionMutationContext,
+  pushRootMutationContext,
   pushMutationContext,
   popMutationContext,
+  rootMutationContext,
 } from './ReactFiberMutationTracking';
 import {
   trackNamedViewTransition,
   untrackNamedViewTransition,
 } from './ReactFiberDuplicateViewTransitions';
+import {markIndicatorHandled} from './ReactFiberRootScheduler';
 
 // Used during the commit phase to track the state of the Offscreen component stack.
 // Allows us to avoid traversing the return path to find the nearest Offscreen ancestor.
@@ -2170,6 +2176,20 @@ function commitMutationEffectsOnFiber(
             }
           }
         }
+      } else {
+        if (enableEagerAlternateStateNodeCleanup) {
+          if (supportsPersistence) {
+            if (finishedWork.alternate !== null) {
+              // `finishedWork.alternate.stateNode` is pointing to a stale shadow
+              // node at this point, retaining it and its subtree. To reclaim
+              // memory, point `alternate.stateNode` to new shadow node. This
+              // prevents shadow node from staying in memory longer than it
+              // needs to. The correct behaviour of this is checked by test in
+              // React Native: ShadowNodeReferenceCounter-itest.js#L150
+              finishedWork.alternate.stateNode = finishedWork.stateNode;
+            }
+          }
+        }
       }
       break;
     }
@@ -2201,6 +2221,7 @@ function commitMutationEffectsOnFiber(
     case HostRoot: {
       const prevProfilerEffectDuration = pushNestedEffectDurations();
 
+      pushRootMutationContext();
       if (supportsResources) {
         prepareToCommitHoistables();
 
@@ -2248,6 +2269,18 @@ function commitMutationEffectsOnFiber(
         root.effectDuration += popNestedEffectDurations(
           prevProfilerEffectDuration,
         );
+      }
+
+      popMutationContext(false);
+
+      if (
+        enableDefaultTransitionIndicator &&
+        rootMutationContext &&
+        includesLoadingIndicatorLanes(lanes)
+      ) {
+        // This root had a mutation. Mark this root as having rendered a manual
+        // loading state.
+        markIndicatorHandled(root);
       }
 
       break;
