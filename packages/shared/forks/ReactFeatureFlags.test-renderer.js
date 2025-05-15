@@ -62,6 +62,7 @@ export const enableInfiniteRenderLoopDetection = false;
 
 export const renameElementSymbol = true;
 export const enableShallowPropDiffing = false;
+export const enableEagerAlternateStateNodeCleanup = false;
 
 export const enableYieldingBeforePassive = true;
 
@@ -72,6 +73,7 @@ export const enableFastAddPropertiesInDiffing = true;
 export const enableLazyPublicInstanceInFabric = false;
 export const enableScrollEndPolyfill = true;
 export const enableSuspenseyImages = false;
+export const enableFizzBlockingRender = true;
 export const enableSrcObject = false;
 export const enableHydrationChangeEvent = false;
 export const enableDefaultTransitionIndicator = false;
@@ -94,6 +96,7 @@ export const enableReactTestRendererWarning = true;
 export const disableDefaultPropsExceptForClasses = true;
 
 export const enableObjectFiber = false;
+export const enableStore = false;
 
 // Flow magic to verify the exports of this file match the original version.
 ((((null: any): ExportsType): FeatureFlagsType): ExportsType);
