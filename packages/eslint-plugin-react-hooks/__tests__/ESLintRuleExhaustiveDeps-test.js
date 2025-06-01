@@ -516,6 +516,22 @@ const tests = {
       options: [{additionalHooks: 'useCustomEffect'}],
     },
     {
+      // behaves like no deps
+      code: normalizeIndent`
+        function MyComponent(props) {
+          useSpecialEffect(() => {
+            console.log(props.foo);
+          }, null);
+        }
+      `,
+      options: [
+        {
+          additionalHooks: 'useSpecialEffect',
+          experimental_autoDependenciesHooks: ['useSpecialEffect'],
+        },
+      ],
+    },
+    {
       code: normalizeIndent`
         function MyComponent(props) {
           useCustomEffect(() => {
@@ -1468,8 +1484,177 @@ const tests = {
         }
       `,
     },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const stableValue = useStableValue();
+          useEffect(() => {
+            console.log(stableValue);
+          }, []); // No need to include stableValue as a dependency
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {name: 'useStableValue', propertiesOrIndexes: null},
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const { stableProp } = usePartiallyStableValue();
+          useEffect(() => {
+            console.log(stableProp); // stableProp is stable, no need to include as dependency
+          }, []); 
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'usePartiallyStableValue',
+              propertiesOrIndexes: ['stableProp'],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const [stableItem] = useArrayWithStableItems();
+          useEffect(() => {
+            console.log(stableItem); // stableItem is stable, no need to include as dependency
+          }, []); 
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useArrayWithStableItems',
+              propertiesOrIndexes: [0],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const { prop1, prop2 } = useMultipleStableProps();
+          useEffect(() => {
+            console.log(prop1, prop2); // prop1 and prop2 are stable
+          }, []); 
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useMultipleStableProps',
+              propertiesOrIndexes: ['prop1', 'prop2'],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const [item1, , item3] = useArrayWithMultipleStableItems();
+          useEffect(() => {
+            console.log(item1, item3); // item1 and item3 are stable
+          }, []); 
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useArrayWithMultipleStableItems',
+              propertiesOrIndexes: [0, 2],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const { stableProp, unstableProp } = useMixedStability();
+          useEffect(() => {
+            console.log(stableProp, unstableProp);
+          }, [unstableProp]); // Only unstableProp needs to be included
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useMixedStability',
+              propertiesOrIndexes: ['stableProp'],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const [stableItem, unstableItem] = useArrayWithStableItems();
+          useEffect(() => {
+            console.log(stableItem, unstableItem);
+          }, [stableItem, unstableItem]); // Including stableItem is allowed
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useArrayWithStableItems',
+              propertiesOrIndexes: [0],
+            },
+          ],
+        },
+      ],
+    },
   ],
   invalid: [
+    {
+      code: normalizeIndent`
+        function MyComponent(props) {
+          useSpecialEffect(() => {
+            console.log(props.foo);
+          }, null);
+        }
+      `,
+      options: [{additionalHooks: 'useSpecialEffect'}],
+      errors: [
+        {
+          message:
+            "React Hook useSpecialEffect was passed a dependency list that is not an array literal. This means we can't statically verify whether you've passed the correct dependencies.",
+        },
+        {
+          message:
+            "React Hook useSpecialEffect has a missing dependency: 'props.foo'. Either include it or remove the dependency array.",
+          suggestions: [
+            {
+              desc: 'Update the dependencies array to be: [props.foo]',
+              output: normalizeIndent`
+                function MyComponent(props) {
+                  useSpecialEffect(() => {
+                    console.log(props.foo);
+                  }, [props.foo]);
+                }
+              `,
+            },
+          ],
+        },
+      ],
+    },
     {
       code: normalizeIndent`
         function MyComponent(props) {
@@ -7672,6 +7857,126 @@ const tests = {
         },
       ],
     },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const [stableItem, unstableItem] = useArrayWithStableItems();
+          useEffect(() => {
+            console.log(stableItem, unstableItem);
+          }, []);
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useArrayWithStableItems',
+              propertiesOrIndexes: [0],
+            },
+          ],
+        },
+      ],
+      errors: [
+        {
+          message:
+            "React Hook useEffect has a missing dependency: 'unstableItem'. " +
+            'Either include it or remove the dependency array.',
+          suggestions: [
+            {
+              desc: 'Update the dependencies array to be: [unstableItem]',
+              output: normalizeIndent`
+                function MyComponent() {
+                  const [stableItem, unstableItem] = useArrayWithStableItems();
+                  useEffect(() => {
+                    console.log(stableItem, unstableItem);
+                  }, [unstableItem]);
+                }
+              `,
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const [stableItem, unstableItem] = useArrayWithStableItems();
+          useEffect(() => {
+            console.log(stableItem, unstableItem);
+          }, []); // Missing unstableItem as dependency
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useArrayWithStableItems',
+              propertiesOrIndexes: [0],
+            },
+          ],
+        },
+      ],
+      errors: [
+        {
+          message:
+            "React Hook useEffect has a missing dependency: 'unstableItem'. " +
+            'Either include it or remove the dependency array.',
+          suggestions: [
+            {
+              desc: 'Update the dependencies array to be: [unstableItem]',
+              output: normalizeIndent`
+                function MyComponent() {
+                  const [stableItem, unstableItem] = useArrayWithStableItems();
+                  useEffect(() => {
+                    console.log(stableItem, unstableItem);
+                  }, [unstableItem]); // Missing unstableItem as dependency
+                }
+              `,
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const { stableProp, unstableProp1, unstableProp2 } = useMixedStability();
+          useEffect(() => {
+            console.log(stableProp, unstableProp1, unstableProp2);
+          }, [unstableProp1]); // Missing unstableProp2 as dependency
+        }
+      `,
+      options: [
+        {
+          stableValueHooks: [
+            {
+              name: 'useMixedStability',
+              propertiesOrIndexes: ['stableProp'],
+            },
+          ],
+        },
+      ],
+      errors: [
+        {
+          message:
+            "React Hook useEffect has a missing dependency: 'unstableProp2'. " +
+            'Either include it or remove the dependency array.',
+          suggestions: [
+            {
+              desc: 'Update the dependencies array to be: [unstableProp1, unstableProp2]',
+              output: normalizeIndent`
+                function MyComponent() {
+                  const { stableProp, unstableProp1, unstableProp2 } = useMixedStability();
+                  useEffect(() => {
+                    console.log(stableProp, unstableProp1, unstableProp2);
+                  }, [unstableProp1, unstableProp2]); // Missing unstableProp2 as dependency
+                }
+              `,
+            },
+          ],
+        },
+      ],
+    },
   ],
 };
 
@@ -7748,6 +8053,34 @@ const testsFlow = {
   invalid: [
     {
       code: normalizeIndent`
+        hook useExample(a) {
+          useEffect(() => {
+            console.log(a);
+          }, []);
+        }
+      `,
+      errors: [
+        {
+          message:
+            "React Hook useEffect has a missing dependency: 'a'. " +
+            'Either include it or remove the dependency array.',
+          suggestions: [
+            {
+              desc: 'Update the dependencies array to be: [a]',
+              output: normalizeIndent`
+                hook useExample(a) {
+                  useEffect(() => {
+                    console.log(a);
+                  }, [a]);
+                }
+              `,
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
       function Foo() {
         const foo = ({}: any);
         useMemo(() => {
@@ -7792,6 +8125,24 @@ const testsTypescript = {
           }, [])
         }
       `,
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const [state, setState] = React.useState<number>(0);
+
+          useSpecialEffect(() => {
+            const someNumber: typeof state = 2;
+            setState(prevState => prevState + someNumber);
+          })
+        }
+      `,
+      options: [
+        {
+          additionalHooks: 'useSpecialEffect',
+          experimental_autoDependenciesHooks: ['useSpecialEffect'],
+        },
+      ],
     },
     {
       code: normalizeIndent`
@@ -8148,6 +8499,48 @@ const testsTypescript = {
         function MyComponent() {
           const [state, setState] = React.useState<number>(0);
 
+          useSpecialEffect(() => {
+            const someNumber: typeof state = 2;
+            setState(prevState => prevState + someNumber + state);
+          }, [])
+        }
+      `,
+      options: [
+        {
+          additionalHooks: 'useSpecialEffect',
+          experimental_autoDependenciesHooks: ['useSpecialEffect'],
+        },
+      ],
+      errors: [
+        {
+          message:
+            "React Hook useSpecialEffect has a missing dependency: 'state'. " +
+            'Either include it or remove the dependency array. ' +
+            `You can also do a functional update 'setState(s => ...)' ` +
+            `if you only need 'state' in the 'setState' call.`,
+          suggestions: [
+            {
+              desc: 'Update the dependencies array to be: [state]',
+              output: normalizeIndent`
+              function MyComponent() {
+                const [state, setState] = React.useState<number>(0);
+
+                useSpecialEffect(() => {
+                  const someNumber: typeof state = 2;
+                  setState(prevState => prevState + someNumber + state);
+                }, [state])
+              }
+              `,
+            },
+          ],
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent() {
+          const [state, setState] = React.useState<number>(0);
+
           useMemo(() => {
             const someNumber: typeof state = 2;
             console.log(someNumber);
@@ -8205,6 +8598,23 @@ const testsTypescript = {
         {
           message:
             'React Hook useCallback received a function whose dependencies are unknown. Pass an inline function instead.',
+        },
+      ],
+    },
+    {
+      code: normalizeIndent`
+        function MyComponent(props) {
+          useEffect(() => {
+            console.log(props.foo);
+          });
+        }
+      `,
+      options: [{requireExplicitEffectDeps: true}],
+      errors: [
+        {
+          message:
+            'React Hook useEffect always requires dependencies. Please add a dependency array or an explicit `undefined`',
+          suggestions: undefined,
         },
       ],
     },
@@ -8311,7 +8721,9 @@ describe('rules-of-hooks/exhaustive-deps', () => {
     },
   };
 
-  const testsBabelEslint = {
+  const testsBabelEslint = tests;
+
+  const testsHermesParser = {
     valid: [...testsFlow.valid, ...tests.valid],
     invalid: [...testsFlow.invalid, ...tests.invalid],
   };
@@ -8334,6 +8746,33 @@ describe('rules-of-hooks/exhaustive-deps', () => {
     'eslint: v9, parser: @babel/eslint-parser',
     ReactHooksESLintRule,
     testsBabelEslint
+  );
+
+  new ESLintTesterV7({
+    parser: require.resolve('hermes-eslint'),
+    parserOptions: {
+      sourceType: 'module',
+      enableExperimentalComponentSyntax: true,
+    },
+  }).run(
+    'eslint: v7, parser: hermes-eslint',
+    ReactHooksESLintRule,
+    testsHermesParser
+  );
+
+  new ESLintTesterV9({
+    languageOptions: {
+      ...languageOptionsV9,
+      parser: require('hermes-eslint'),
+      parserOptions: {
+        sourceType: 'module',
+        enableExperimentalComponentSyntax: true,
+      },
+    },
+  }).run(
+    'eslint: v9, parser: hermes-eslint',
+    ReactHooksESLintRule,
+    testsHermesParser
   );
 
   const testsTypescriptEslintParser = {

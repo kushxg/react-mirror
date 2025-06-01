@@ -16,10 +16,10 @@ import type {
   Identifier,
   Node,
   Pattern,
-  PrivateIdentifier,
   Super,
-  VariableDeclarator,
 } from 'estree';
+
+import {isStableHookValue} from '../utils/stableHooks';
 
 type DeclaredDependency = {
   key: string;
@@ -61,28 +61,85 @@ const rule = {
           enableDangerousAutofixThisMayCauseInfiniteLoops: {
             type: 'boolean',
           },
+          experimental_autoDependenciesHooks: {
+            type: 'array',
+            items: {
+              type: 'string',
+            },
+          },
+          stableValueHooks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: {
+                  type: 'string',
+                  propertiesOrIndexes: {
+                    oneOf: [
+                      {
+                        type: 'null',
+                      },
+                      {
+                        type: 'array',
+                        items: {
+                          type: 'string',
+                        },
+                      },
+                      {
+                        type: 'array',
+                        items: {
+                          type: 'number',
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          requireExplicitEffectDeps: {
+            type: 'boolean',
+          },
         },
       },
     ],
   },
   create(context: Rule.RuleContext) {
+    const rawOptions = context.options && context.options[0];
+
     // Parse the `additionalHooks` regex.
     const additionalHooks =
-      context.options &&
-      context.options[0] &&
-      context.options[0].additionalHooks
-        ? new RegExp(context.options[0].additionalHooks)
+      rawOptions && rawOptions.additionalHooks
+        ? new RegExp(rawOptions.additionalHooks)
         : undefined;
 
     const enableDangerousAutofixThisMayCauseInfiniteLoops: boolean =
-      (context.options &&
-        context.options[0] &&
-        context.options[0].enableDangerousAutofixThisMayCauseInfiniteLoops) ||
+      (rawOptions &&
+        rawOptions.enableDangerousAutofixThisMayCauseInfiniteLoops) ||
       false;
+
+    const experimental_autoDependenciesHooks: ReadonlyArray<string> =
+      rawOptions && Array.isArray(rawOptions.experimental_autoDependenciesHooks)
+        ? rawOptions.experimental_autoDependenciesHooks
+        : [];
+
+    const requireExplicitEffectDeps: boolean =
+      (rawOptions && rawOptions.requireExplicitEffectDeps) || false;
+
+    const stableValueHooks: Map<string, null | Array<number> | Array<string>> =
+      new Map();
+    if (rawOptions && rawOptions.stableValueHooks) {
+      for (const config of rawOptions.stableValueHooks) {
+        stableValueHooks.set(config.name, config.propertiesOrIndexes);
+      }
+    }
 
     const options = {
       additionalHooks,
+      experimental_autoDependenciesHooks,
       enableDangerousAutofixThisMayCauseInfiniteLoops,
+      requireExplicitEffectDeps,
+      stableValueHooks,
     };
 
     function reportProblem(problem: Rule.ReportDescriptor) {
@@ -162,6 +219,7 @@ const rule = {
       reactiveHook: Node,
       reactiveHookName: string,
       isEffect: boolean,
+      isAutoDepsHook: boolean,
     ): void {
       if (isEffect && node.async) {
         reportProblem({
@@ -203,7 +261,13 @@ const rule = {
         let currentScope = scope.upper;
         while (currentScope) {
           pureScopes.add(currentScope);
-          if (currentScope.type === 'function') {
+          if (
+            currentScope.type === 'function' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'hook' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'component'
+          ) {
             break;
           }
           currentScope = currentScope.upper;
@@ -219,158 +283,16 @@ const rule = {
 
       const isArray = Array.isArray;
 
-      // Next we'll define a few helpers that helps us
-      // tell if some values don't have to be declared as deps.
-
-      // Some are known to be stable based on Hook calls.
-      // const [state, setState] = useState() / React.useState()
-      //               ^^^ true for this reference
-      // const [state, dispatch] = useReducer() / React.useReducer()
-      //               ^^^ true for this reference
-      // const [state, dispatch] = useActionState() / React.useActionState()
-      //               ^^^ true for this reference
-      // const ref = useRef()
-      //       ^^^ true for this reference
-      // const onStuff = useEffectEvent(() => {})
-      //       ^^^ true for this reference
-      // False for everything else.
+      // This helper function helps us determine if a variable is stable and can therefore
+      // be omitted from the dependency array.
       function isStableKnownHookValue(resolved: Scope.Variable): boolean {
-        if (!isArray(resolved.defs)) {
-          return false;
-        }
-        const def = resolved.defs[0];
-        if (def == null) {
-          return false;
-        }
-        // Look for `let stuff = ...`
-        const defNode: VariableDeclarator = def.node;
-        if (defNode.type !== 'VariableDeclarator') {
-          return false;
-        }
-        let init = defNode.init;
-        if (init == null) {
-          return false;
-        }
-        while (init.type === 'TSAsExpression' || init.type === 'AsExpression') {
-          init = init.expression;
-        }
-        // Detect primitive constants
-        // const foo = 42
-        let declaration = defNode.parent;
-        if (declaration == null && componentScope != null) {
-          // This might happen if variable is declared after the callback.
-          // In that case ESLint won't set up .parent refs.
-          // So we'll set them up manually.
-          fastFindReferenceWithParent(componentScope.block, def.node.id);
-          declaration = def.node.parent;
-          if (declaration == null) {
-            return false;
-          }
-        }
-        if (
-          declaration != null &&
-          'kind' in declaration &&
-          declaration.kind === 'const' &&
-          init.type === 'Literal' &&
-          (typeof init.value === 'string' ||
-            typeof init.value === 'number' ||
-            init.value === null)
-        ) {
-          // Definitely stable
-          return true;
-        }
-        // Detect known Hook calls
-        // const [_, setState] = useState()
-        if (init.type !== 'CallExpression') {
-          return false;
-        }
-        let callee: Expression | PrivateIdentifier | Super = init.callee;
-        // Step into `= React.something` initializer.
-        if (
-          callee.type === 'MemberExpression' &&
-          'name' in callee.object &&
-          callee.object.name === 'React' &&
-          callee.property != null &&
-          !callee.computed
-        ) {
-          callee = callee.property;
-        }
-        if (callee.type !== 'Identifier') {
-          return false;
-        }
-        const definitionNode: VariableDeclarator = def.node;
-        const id = definitionNode.id;
-        const {name} = callee;
-        if (name === 'useRef' && id.type === 'Identifier') {
-          // useRef() return value is stable.
-          return true;
-        } else if (
-          isUseEffectEventIdentifier(callee) &&
-          id.type === 'Identifier'
-        ) {
-          for (const ref of resolved.references) {
-            // @ts-expect-error These types are not compatible (Reference and Identifier)
-            if (ref !== id) {
-              useEffectEventVariables.add(ref.identifier);
-            }
-          }
-          // useEffectEvent() return value is always unstable.
-          return true;
-        } else if (
-          name === 'useState' ||
-          name === 'useReducer' ||
-          name === 'useActionState'
-        ) {
-          // Only consider second value in initializing tuple stable.
-          if (
-            id.type === 'ArrayPattern' &&
-            id.elements.length === 2 &&
-            isArray(resolved.identifiers)
-          ) {
-            // Is second tuple value the same reference we're checking?
-            if (id.elements[1] === resolved.identifiers[0]) {
-              if (name === 'useState') {
-                const references = resolved.references;
-                let writeCount = 0;
-                for (const reference of references) {
-                  if (reference.isWrite()) {
-                    writeCount++;
-                  }
-                  if (writeCount > 1) {
-                    return false;
-                  }
-                  setStateCallSites.set(reference.identifier, id.elements[0]);
-                }
-              }
-              // Setter is stable.
-              return true;
-            } else if (id.elements[0] === resolved.identifiers[0]) {
-              if (name === 'useState') {
-                const references = resolved.references;
-                for (const reference of references) {
-                  stateVariables.add(reference.identifier);
-                }
-              }
-              // State variable itself is dynamic.
-              return false;
-            }
-          }
-        } else if (name === 'useTransition') {
-          // Only consider second value in initializing tuple stable.
-          if (
-            id.type === 'ArrayPattern' &&
-            id.elements.length === 2 &&
-            Array.isArray(resolved.identifiers)
-          ) {
-            // Is second tuple value the same reference we're checking?
-            if (id.elements[1] === resolved.identifiers[0]) {
-              // Setter is stable.
-              return true;
-            }
-          }
-        }
-        // By default assume it's dynamic.
-        return false;
+        return isStableHookValue(
+          resolved,
+          options.stableValueHooks,
+          setStateCallSites,
+          stateVariables,
+          useEffectEventVariables,
+        );
       }
 
       // Some are just functions that don't reference anything dynamic.
@@ -643,6 +565,9 @@ const rule = {
       }
 
       if (!declaredDependenciesNode) {
+        if (isAutoDepsHook) {
+          return;
+        }
         // Check if there are any top-level setState() calls.
         // Those tend to lead to infinite loops.
         let setStateInsideEffectWithoutDeps: string | null = null;
@@ -703,6 +628,13 @@ const rule = {
             ],
           });
         }
+        return;
+      }
+      if (
+        isAutoDepsHook &&
+        declaredDependenciesNode.type === 'Literal' &&
+        declaredDependenciesNode.value === null
+      ) {
         return;
       }
 
@@ -1312,10 +1244,28 @@ const rule = {
         return;
       }
 
+      if (!maybeNode && isEffect && options.requireExplicitEffectDeps) {
+        reportProblem({
+          node: reactiveHook,
+          message:
+            `React Hook ${reactiveHookName} always requires dependencies. ` +
+            `Please add a dependency array or an explicit \`undefined\``,
+        });
+      }
+
+      const isAutoDepsHook =
+        options.experimental_autoDependenciesHooks.includes(reactiveHookName);
+
       // Check the declared dependencies for this reactive hook. If there is no
       // second argument then the reactive callback will re-run on every render.
       // So no need to check for dependency inclusion.
-      if (!declaredDependenciesNode && !isEffect) {
+      if (
+        (!declaredDependenciesNode ||
+          (isAutoDepsHook &&
+            declaredDependenciesNode.type === 'Literal' &&
+            declaredDependenciesNode.value === null)) &&
+        !isEffect
+      ) {
         // These are only used for optimization.
         if (
           reactiveHookName === 'useMemo' ||
@@ -1349,11 +1299,17 @@ const rule = {
             reactiveHook,
             reactiveHookName,
             isEffect,
+            isAutoDepsHook,
           );
           return; // Handled
         case 'Identifier':
-          if (!declaredDependenciesNode) {
-            // No deps, no problems.
+          if (
+            !declaredDependenciesNode ||
+            (isAutoDepsHook &&
+              declaredDependenciesNode.type === 'Literal' &&
+              declaredDependenciesNode.value === null)
+          ) {
+            // Always runs, no problems.
             return; // Handled
           }
           // The function passed as a callback is not written inline.
@@ -1402,6 +1358,7 @@ const rule = {
                 reactiveHook,
                 reactiveHookName,
                 isEffect,
+                isAutoDepsHook,
               );
               return; // Handled
             case 'VariableDeclarator':
@@ -1421,6 +1378,7 @@ const rule = {
                     reactiveHook,
                     reactiveHookName,
                     isEffect,
+                    isAutoDepsHook,
                   );
                   return; // Handled
               }
@@ -2055,12 +2013,7 @@ function isAncestorNodeOf(a: Node, b: Node): boolean {
   );
 }
 
-function isUseEffectEventIdentifier(node: Node): boolean {
-  if (__EXPERIMENTAL__) {
-    return node.type === 'Identifier' && node.name === 'useEffectEvent';
-  }
-  return false;
-}
+// This function is now imported from stableHooks.ts
 
 function getUnknownDependenciesMessage(reactiveHookName: string): string {
   return (

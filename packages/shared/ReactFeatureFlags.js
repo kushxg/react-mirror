@@ -98,6 +98,8 @@ export const enableScrollEndPolyfill = __EXPERIMENTAL__;
 
 export const enableSuspenseyImages = false;
 
+export const enableFizzBlockingRender = __EXPERIMENTAL__; // rel="expect"
+
 export const enableSrcObject = __EXPERIMENTAL__;
 
 export const enableHydrationChangeEvent = __EXPERIMENTAL__;
@@ -140,6 +142,8 @@ export const passChildrenWhenCloningPersistedNodes = false;
 export const enablePersistedModeClonedFlag = false;
 
 export const enableShallowPropDiffing = false;
+
+export const enableEagerAlternateStateNodeCleanup = true;
 
 /**
  * Enables an expiration time for retry lanes to avoid starvation.
@@ -190,7 +194,7 @@ export const disableLegacyContext = true;
 export const disableLegacyContextForFunctionComponents = true;
 
 // Enable the moveBefore() alternative to insertBefore(). This preserves states of moves.
-export const enableMoveBefore = __EXPERIMENTAL__;
+export const enableMoveBefore = false;
 
 // Disabled caching behavior of `react/cache` in client runtimes.
 export const disableClientCache = true;
