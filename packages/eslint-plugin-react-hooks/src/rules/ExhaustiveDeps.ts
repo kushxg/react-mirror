@@ -61,28 +61,85 @@ const rule = {
           enableDangerousAutofixThisMayCauseInfiniteLoops: {
             type: 'boolean',
           },
+          experimental_autoDependenciesHooks: {
+            type: 'array',
+            items: {
+              type: 'string',
+            },
+          },
+          stableValueHooks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: {
+                  type: 'string',
+                  propertiesOrIndexes: {
+                    oneOf: [
+                      {
+                        type: 'null',
+                      },
+                      {
+                        type: 'array',
+                        items: {
+                          type: 'string',
+                        },
+                      },
+                      {
+                        type: 'array',
+                        items: {
+                          type: 'number',
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          requireExplicitEffectDeps: {
+            type: 'boolean',
+          },
         },
       },
     ],
   },
   create(context: Rule.RuleContext) {
+    const rawOptions = context.options && context.options[0];
+
     // Parse the `additionalHooks` regex.
     const additionalHooks =
-      context.options &&
-      context.options[0] &&
-      context.options[0].additionalHooks
-        ? new RegExp(context.options[0].additionalHooks)
+      rawOptions && rawOptions.additionalHooks
+        ? new RegExp(rawOptions.additionalHooks)
         : undefined;
 
     const enableDangerousAutofixThisMayCauseInfiniteLoops: boolean =
-      (context.options &&
-        context.options[0] &&
-        context.options[0].enableDangerousAutofixThisMayCauseInfiniteLoops) ||
+      (rawOptions &&
+        rawOptions.enableDangerousAutofixThisMayCauseInfiniteLoops) ||
       false;
+
+    const experimental_autoDependenciesHooks: ReadonlyArray<string> =
+      rawOptions && Array.isArray(rawOptions.experimental_autoDependenciesHooks)
+        ? rawOptions.experimental_autoDependenciesHooks
+        : [];
+
+    const requireExplicitEffectDeps: boolean =
+      (rawOptions && rawOptions.requireExplicitEffectDeps) || false;
+
+    const stableValueHooks: Map<string, null | Array<number> | Array<string>> =
+      new Map();
+    if (rawOptions && rawOptions.stableValueHooks) {
+      for (const config of rawOptions.stableValueHooks) {
+        stableValueHooks.set(config.name, config.propertiesOrIndexes);
+      }
+    }
 
     const options = {
       additionalHooks,
+      experimental_autoDependenciesHooks,
       enableDangerousAutofixThisMayCauseInfiniteLoops,
+      requireExplicitEffectDeps,
+      stableValueHooks,
     };
 
     function reportProblem(problem: Rule.ReportDescriptor) {
@@ -162,6 +219,7 @@ const rule = {
       reactiveHook: Node,
       reactiveHookName: string,
       isEffect: boolean,
+      isAutoDepsHook: boolean,
     ): void {
       if (isEffect && node.async) {
         reportProblem({
@@ -203,7 +261,13 @@ const rule = {
         let currentScope = scope.upper;
         while (currentScope) {
           pureScopes.add(currentScope);
-          if (currentScope.type === 'function') {
+          if (
+            currentScope.type === 'function' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'hook' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'component'
+          ) {
             break;
           }
           currentScope = currentScope.upper;
@@ -367,6 +431,54 @@ const rule = {
               // Setter is stable.
               return true;
             }
+          }
+        } else if (options.stableValueHooks.has(name)) {
+          const config = options.stableValueHooks.get(name);
+          if (config == null) {
+            // No properties or indexes were provided, so the whole value is stable
+            return id.type === 'Identifier';
+          } else {
+            /* An array of properties or indexes was provided.
+             * We need to check if this variable is a destructured property or index
+             * from the hook's return value.
+             */
+            if (id.type === 'ArrayPattern') {
+              // Find the index for the identifier we're checking
+              const identifierIndex = id.elements.findIndex(
+                el => el === resolved.identifiers[0],
+              );
+
+              if (identifierIndex !== -1) {
+                // Check if this index is in the configured list of stable indexes
+                return (
+                  config.some(
+                    idx => idx === identifierIndex,
+                  )
+                );
+              }
+            } else if (id.type === 'ObjectPattern') {
+              // Find the destructured property for the identifier we're checking
+              for (const property of id.properties) {
+                if (
+                  property.type === 'Property' &&
+                  property.value.type === 'Identifier' &&
+                  property.value === resolved.identifiers[0] &&
+                  property.key.type === 'Identifier' &&
+                  'name' in property.key
+                ) {
+                  // Check if this property name is in the configured list of stable properties
+                  return (
+                    config.some(prop => {
+                      if ('name' in property.key) {
+                        return prop === property.key.name;
+                      }
+                      return false;
+                    })
+                  );
+                }
+              }
+            }
+            return false;
           }
         }
         // By default assume it's dynamic.
@@ -643,6 +755,9 @@ const rule = {
       }
 
       if (!declaredDependenciesNode) {
+        if (isAutoDepsHook) {
+          return;
+        }
         // Check if there are any top-level setState() calls.
         // Those tend to lead to infinite loops.
         let setStateInsideEffectWithoutDeps: string | null = null;
@@ -703,6 +818,13 @@ const rule = {
             ],
           });
         }
+        return;
+      }
+      if (
+        isAutoDepsHook &&
+        declaredDependenciesNode.type === 'Literal' &&
+        declaredDependenciesNode.value === null
+      ) {
         return;
       }
 
@@ -1312,10 +1434,28 @@ const rule = {
         return;
       }
 
+      if (!maybeNode && isEffect && options.requireExplicitEffectDeps) {
+        reportProblem({
+          node: reactiveHook,
+          message:
+            `React Hook ${reactiveHookName} always requires dependencies. ` +
+            `Please add a dependency array or an explicit \`undefined\``,
+        });
+      }
+
+      const isAutoDepsHook =
+        options.experimental_autoDependenciesHooks.includes(reactiveHookName);
+
       // Check the declared dependencies for this reactive hook. If there is no
       // second argument then the reactive callback will re-run on every render.
       // So no need to check for dependency inclusion.
-      if (!declaredDependenciesNode && !isEffect) {
+      if (
+        (!declaredDependenciesNode ||
+          (isAutoDepsHook &&
+            declaredDependenciesNode.type === 'Literal' &&
+            declaredDependenciesNode.value === null)) &&
+        !isEffect
+      ) {
         // These are only used for optimization.
         if (
           reactiveHookName === 'useMemo' ||
@@ -1349,11 +1489,17 @@ const rule = {
             reactiveHook,
             reactiveHookName,
             isEffect,
+            isAutoDepsHook,
           );
           return; // Handled
         case 'Identifier':
-          if (!declaredDependenciesNode) {
-            // No deps, no problems.
+          if (
+            !declaredDependenciesNode ||
+            (isAutoDepsHook &&
+              declaredDependenciesNode.type === 'Literal' &&
+              declaredDependenciesNode.value === null)
+          ) {
+            // Always runs, no problems.
             return; // Handled
           }
           // The function passed as a callback is not written inline.
@@ -1402,6 +1548,7 @@ const rule = {
                 reactiveHook,
                 reactiveHookName,
                 isEffect,
+                isAutoDepsHook,
               );
               return; // Handled
             case 'VariableDeclarator':
@@ -1421,6 +1568,7 @@ const rule = {
                     reactiveHook,
                     reactiveHookName,
                     isEffect,
+                    isAutoDepsHook,
                   );
                   return; // Handled
               }
