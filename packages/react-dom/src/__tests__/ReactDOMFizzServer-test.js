@@ -1318,10 +1318,8 @@ describe('ReactDOMFizzServer', () => {
     expect(ref.current).toBe(null);
     expect(getVisibleChildren(container)).toEqual(
       <div>
-        Loading A
-        {/* // TODO: This is incorrect. It should be "Loading B" but Fizz SuspenseList
-            // isn't implemented fully yet. */}
-        <span>B</span>
+        {'Loading A'}
+        {'Loading B'}
       </div>,
     );
 
@@ -1335,11 +1333,9 @@ describe('ReactDOMFizzServer', () => {
     // We haven't resolved yet.
     expect(getVisibleChildren(container)).toEqual(
       <div>
-        Loading A
-        {/* // TODO: This is incorrect. It should be "Loading B" but Fizz SuspenseList
-            // isn't implemented fully yet. */}
-        <span>B</span>
-        Loading C
+        {'Loading A'}
+        {'Loading B'}
+        {'Loading C'}
       </div>,
     );
 
@@ -3590,7 +3586,9 @@ describe('ReactDOMFizzServer', () => {
         (gate(flags => flags.shouldUseFizzExternalRuntime)
           ? '<script src="react-dom-bindings/src/server/ReactDOMServerExternalRuntime.js" async=""></script>'
           : '') +
-        '<link rel="expect" href="#«R»" blocking="render">',
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<link rel="expect" href="#«R»" blocking="render">'
+          : ''),
     );
   });
 
@@ -4523,7 +4521,15 @@ describe('ReactDOMFizzServer', () => {
 
     // the html should be as-is
     expect(document.documentElement.innerHTML).toEqual(
-      '<head><script src="react-dom-bindings/src/server/ReactDOMServerExternalRuntime.js" async=""></script><link rel="expect" href="#«R»" blocking="render"></head><body><p>hello world!</p><template id="«R»"></template></body>',
+      '<head><script src="react-dom-bindings/src/server/ReactDOMServerExternalRuntime.js" async=""></script>' +
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<link rel="expect" href="#«R»" blocking="render">'
+          : '') +
+        '</head><body><p>hello world!</p>' +
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<template id="«R»"></template>'
+          : '') +
+        '</body>',
     );
   });
 
@@ -5857,6 +5863,7 @@ describe('ReactDOMFizzServer', () => {
         const {pipe} = renderToPipeableStream(<App />);
         pipe(writable);
       });
+      // Server error
       assertConsoleErrorDev([
         'React expects the `children` prop of <title> tags to be a string, number, bigint, ' +
           'or object with a novel `toString` method but found an Array with length 2 instead. ' +
@@ -5883,6 +5890,22 @@ describe('ReactDOMFizzServer', () => {
       expect(errors).toEqual([]);
       // with float, the title doesn't render on the client or on the server
       expect(getVisibleChildren(document.head)).toEqual(<title />);
+      // Client error
+      assertConsoleErrorDev(
+        [
+          'React expects the `children` prop of <title> tags to be a string, number, bigint, ' +
+            'or object with a novel `toString` method but found an Array with length 2 instead. ' +
+            'Browsers treat all child Nodes of <title> tags as Text content and React expects ' +
+            'to be able to convert `children` of <title> tags to a single string value which is why ' +
+            'Arrays of length greater than 1 are not supported. ' +
+            'When using JSX it can be common to combine text nodes and value nodes. ' +
+            'For example: <title>hello {nameOfUser}</title>. ' +
+            'While not immediately apparent, `children` in this case is an Array with length 2. ' +
+            'If your `children` prop is using this form try rewriting it using a template string: ' +
+            '<title>{`hello ${nameOfUser}`}</title>',
+        ],
+        {withoutStack: true},
+      );
     });
 
     it('should warn in dev if you pass a React Component as a child to <title>', async () => {
@@ -5904,6 +5927,7 @@ describe('ReactDOMFizzServer', () => {
         const {pipe} = renderToPipeableStream(<App />);
         pipe(writable);
       });
+      // Server error
       assertConsoleErrorDev([
         'React expects the `children` prop of <title> tags to be a string, number, bigint, ' +
           'or object with a novel `toString` method but found an object that appears to be a ' +
@@ -5932,6 +5956,20 @@ describe('ReactDOMFizzServer', () => {
       expect(getVisibleChildren(document.head)).toEqual(
         <title>{'[object Object]'}</title>,
       );
+      // Client error
+      assertConsoleErrorDev(
+        [
+          'React expects the `children` prop of <title> tags to be a string, number, bigint, ' +
+            'or object with a novel `toString` method but found an object that appears to be a ' +
+            'React element which never implements a suitable `toString` method. ' +
+            'Browsers treat all child Nodes of <title> tags as Text content and React expects ' +
+            'to be able to convert children of <title> tags to a single string value which is ' +
+            'why rendering React elements is not supported. If the `children` of <title> is a ' +
+            'React Component try moving the <title> tag into that component. ' +
+            'If the `children` of <title> is some HTML markup change it to be Text only to be valid HTML.',
+        ],
+        {withoutStack: true},
+      );
     });
 
     it('should warn in dev if you pass an object that does not implement toString as a child to <title>', async () => {
@@ -5947,6 +5985,7 @@ describe('ReactDOMFizzServer', () => {
         const {pipe} = renderToPipeableStream(<App />);
         pipe(writable);
       });
+      // Server error
       assertConsoleErrorDev([
         'React expects the `children` prop of <title> tags to be a string, number, bigint, ' +
           'or object with a novel `toString` method but found an object that does not implement a ' +
@@ -5974,6 +6013,20 @@ describe('ReactDOMFizzServer', () => {
       // object titles are toStringed when float is on
       expect(getVisibleChildren(document.head)).toEqual(
         <title>{'[object Object]'}</title>,
+      );
+      // Client error
+      assertConsoleErrorDev(
+        [
+          'React expects the `children` prop of <title> tags to be a string, number, bigint, ' +
+            'or object with a novel `toString` method but found an object that does not implement a ' +
+            'suitable `toString` method. Browsers treat all child Nodes of <title> tags as Text ' +
+            'content and React expects to be able to convert children of <title> tags to a single string value. ' +
+            'Using the default `toString` method available on every object is almost certainly an error. ' +
+            'Consider whether the `children` of this <title> is an object in error and change it to a ' +
+            'string or number value if so. Otherwise implement a `toString` method that React can ' +
+            'use to produce a valid <title>.',
+        ],
+        {withoutStack: true},
       );
     });
   });
@@ -6512,7 +6565,14 @@ describe('ReactDOMFizzServer', () => {
         (gate(flags => flags.shouldUseFizzExternalRuntime)
           ? '<script src="react-dom-bindings/src/server/ReactDOMServerExternalRuntime.js" async=""></script>'
           : '') +
-        '<link rel="expect" href="#«R»" blocking="render"></head><body><script>try { foo() } catch (e) {} ;</script><template id="«R»"></template></body></html>',
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<link rel="expect" href="#«R»" blocking="render">'
+          : '') +
+        '</head><body><script>try { foo() } catch (e) {} ;</script>' +
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<template id="«R»"></template>'
+          : '') +
+        '</body></html>',
     );
   });
 

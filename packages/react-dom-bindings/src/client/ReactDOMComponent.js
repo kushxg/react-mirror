@@ -61,6 +61,7 @@ import possibleStandardNames from '../shared/possibleStandardNames';
 import {validateProperties as validateARIAProperties} from '../shared/ReactDOMInvalidARIAHook';
 import {validateProperties as validateInputProperties} from '../shared/ReactDOMNullInputValuePropHook';
 import {validateProperties as validateUnknownProperties} from '../shared/ReactDOMUnknownPropertyHook';
+import {validateProperties as validateTitleProperties} from '../shared/ReactDOMTitle';
 import sanitizeURL from '../shared/sanitizeURL';
 
 import noop from 'shared/noop';
@@ -72,6 +73,7 @@ import {
   enableScrollEndPolyfill,
   enableSrcObject,
   enableTrustedTypesIntegration,
+  enableViewTransition,
 } from 'shared/ReactFeatureFlags';
 import {
   mediaEventTypes,
@@ -98,6 +100,7 @@ function validatePropertiesInDevelopment(type: string, props: any) {
       registrationNameDependencies,
       possibleRegistrationNames,
     });
+    validateTitleProperties(type, props);
     if (
       props.contentEditable &&
       !props.suppressContentEditableWarning &&
@@ -3217,6 +3220,18 @@ export function diffHydratedProperties(
           break;
         case 'selected':
           break;
+        case 'vt-name':
+        case 'vt-update':
+        case 'vt-enter':
+        case 'vt-exit':
+        case 'vt-share':
+          if (enableViewTransition) {
+            // View Transition annotations are expected from the Server Runtime.
+            // However, if they're also specified on the client and don't match
+            // that's an error.
+            break;
+          }
+        // Fallthrough
         default:
           // Intentionally use the original name.
           // See discussion in https://github.com/facebook/react/pull/10676.
