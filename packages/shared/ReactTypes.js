@@ -229,12 +229,27 @@ export type ReactErrorInfoDev = {
 
 export type ReactErrorInfo = ReactErrorInfoProd | ReactErrorInfoDev;
 
-export type ReactAsyncInfo = {
-  +type: string,
+// The point where the Async Info started which might not be the same place it was awaited.
+export type ReactIOInfo = {
+  +name: string, // the name of the async function being called (e.g. "fetch")
+  +start: number, // the start time
+  +end: number, // the end time (this might be different from the time the await was unblocked)
+  +env?: string, // the environment where this I/O was spawned.
+  +owner?: null | ReactComponentInfo,
+  +stack?: null | ReactStackTrace,
   // Stashed Data for the Specific Execution Environment. Not part of the transport protocol
   +debugStack?: null | Error,
   +debugTask?: null | ConsoleTask,
+};
+
+export type ReactAsyncInfo = {
+  +awaited: ReactIOInfo,
+  +env?: string, // the environment where this was awaited. This might not be the same as where it was spawned.
+  +owner?: null | ReactComponentInfo,
   +stack?: null | ReactStackTrace,
+  // Stashed Data for the Specific Execution Environment. Not part of the transport protocol
+  +debugStack?: null | Error,
+  +debugTask?: null | ConsoleTask,
 };
 
 export type ReactTimeInfo = {
@@ -289,6 +304,30 @@ export type SuspenseProps = {
   unstable_expectedLoadTime?: number,
   name?: string,
 };
+
+export type SuspenseListRevealOrder =
+  | 'forwards'
+  | 'backwards'
+  | 'together'
+  | void;
+
+export type SuspenseListTailMode = 'collapsed' | 'hidden' | void;
+
+type DirectionalSuspenseListProps = {
+  children?: ReactNodeList,
+  revealOrder: 'forwards' | 'backwards',
+  tail?: SuspenseListTailMode,
+};
+
+type NonDirectionalSuspenseListProps = {
+  children?: ReactNodeList,
+  revealOrder?: 'together' | void,
+  tail?: void,
+};
+
+export type SuspenseListProps =
+  | DirectionalSuspenseListProps
+  | NonDirectionalSuspenseListProps;
 
 export type TracingMarkerProps = {
   name: string,
