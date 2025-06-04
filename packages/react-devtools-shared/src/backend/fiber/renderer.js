@@ -1885,7 +1885,20 @@ export function attach(
         // releasing DevTools in lockstep with React, we should import a
         // function from the reconciler instead.
         const PerformedWork = 0b000000000000000000000000001;
-        return (getFiberFlags(nextFiber) & PerformedWork) === PerformedWork;
+        if ((getFiberFlags(nextFiber) & PerformedWork) === 0) {
+          return false;
+        }
+        if (
+          prevFiber != null &&
+          prevFiber.memoizedProps === nextFiber.memoizedProps &&
+          prevFiber.memoizedState === nextFiber.memoizedState &&
+          prevFiber.ref === nextFiber.ref
+        ) {
+          // React may mark PerformedWork even if we bailed out. Double check
+          // that inputs actually changed before reporting a render.
+          return false;
+        }
+        return true;
       // Note: ContextConsumer only gets PerformedWork effect in 16.3.3+
       // so it won't get highlighted with React 16.3.0 to 16.3.2.
       default:
@@ -5859,86 +5872,6 @@ export function attach(
     return unresolvedSource;
   }
 
-  type InternalMcpFunctions = {
-    __internal_only_getComponentTree?: Function,
-  };
-
-  const internalMcpFunctions: InternalMcpFunctions = {};
-  if (__IS_INTERNAL_MCP_BUILD__) {
-    // eslint-disable-next-line no-inner-declarations
-    function __internal_only_getComponentTree(): string {
-      let treeString = '';
-
-      function buildTreeString(
-        instance: DevToolsInstance,
-        prefix: string = '',
-        isLastChild: boolean = true,
-      ): void {
-        if (!instance) return;
-
-        const name =
-          (instance.kind !== VIRTUAL_INSTANCE
-            ? getDisplayNameForFiber(instance.data)
-            : instance.data.name) || 'Unknown';
-
-        const id = instance.id !== undefined ? instance.id : 'unknown';
-
-        if (name !== 'createRoot()') {
-          treeString +=
-            prefix +
-            (isLastChild ? '└── ' : '├── ') +
-            name +
-            ' (id: ' +
-            id +
-            ')\n';
-        }
-
-        const childPrefix = prefix + (isLastChild ? '    ' : '│   ');
-
-        let childCount = 0;
-        let tempChild = instance.firstChild;
-        while (tempChild !== null) {
-          childCount++;
-          tempChild = tempChild.nextSibling;
-        }
-
-        let child = instance.firstChild;
-        let currentChildIndex = 0;
-
-        while (child !== null) {
-          currentChildIndex++;
-          const isLastSibling = currentChildIndex === childCount;
-          buildTreeString(child, childPrefix, isLastSibling);
-          child = child.nextSibling;
-        }
-      }
-
-      const rootInstances: Array<DevToolsInstance> = [];
-      idToDevToolsInstanceMap.forEach(instance => {
-        if (instance.parent === null || instance.parent.parent === null) {
-          rootInstances.push(instance);
-        }
-      });
-
-      if (rootInstances.length > 0) {
-        for (let i = 0; i < rootInstances.length; i++) {
-          const isLast = i === rootInstances.length - 1;
-          buildTreeString(rootInstances[i], '', isLast);
-          if (!isLast) {
-            treeString += '\n';
-          }
-        }
-      } else {
-        treeString = 'No component tree found.';
-      }
-
-      return treeString;
-    }
-
-    internalMcpFunctions.__internal_only_getComponentTree =
-      __internal_only_getComponentTree;
-  }
-
   return {
     cleanup,
     clearErrorsAndWarnings,
@@ -5978,6 +5911,5 @@ export function attach(
     storeAsGlobal,
     updateComponentFilters,
     getEnvironmentNames,
-    ...internalMcpFunctions,
   };
 }
