@@ -13,6 +13,7 @@ import {Environment, ReactFunctionType} from './Environment';
 import type {HookKind} from './ObjectShape';
 import {Type, makeType} from './Types';
 import {z} from 'zod';
+import {AliasingEffect} from '../Inference/InferMutationAliasingEffects';
 
 /*
  * *******************************************************************************************
@@ -100,6 +101,7 @@ export type ReactiveInstruction = {
   id: InstructionId;
   lvalue: Place | null;
   value: ReactiveValue;
+  effects?: Array<AliasingEffect> | null; // TODO make non-optional
   loc: SourceLocation;
 };
 
@@ -278,6 +280,7 @@ export type HIRFunction = {
   params: Array<Place | SpreadPattern>;
   returnTypeAnnotation: t.FlowType | t.TSType | null;
   returnType: Type;
+  returns: Place;
   context: Array<Place>;
   effects: Array<FunctionEffect> | null;
   body: HIR;
@@ -300,6 +303,10 @@ export type FunctionEffect =
       places: ReadonlySet<Place>;
       effect: Effect;
       loc: SourceLocation;
+    }
+  | {
+      kind: 'CaptureEffect';
+      places: ReadonlySet<Place>;
     };
 
 /*
@@ -645,12 +652,18 @@ export type Instruction = {
   lvalue: Place;
   value: InstructionValue;
   loc: SourceLocation;
+  effects: Array<AliasingEffect> | null;
 };
+
+export function todoPopulateAliasingEffects(): Array<AliasingEffect> | null {
+  return null;
+}
 
 export type TInstruction<T extends InstructionValue> = {
   id: InstructionId;
   lvalue: Place;
   value: T;
+  effects: Array<AliasingEffect> | null;
   loc: SourceLocation;
 };
 
