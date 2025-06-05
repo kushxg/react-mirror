@@ -35,6 +35,10 @@ import type {
   Type,
 } from './HIR';
 import {GotoVariant, InstructionKind} from './HIR';
+import {
+  AliasedPlace,
+  AliasingEffect,
+} from '../Inference/InferMutationAliasingEffects';
 
 export type Options = {
   indent: number;
@@ -67,13 +71,15 @@ export function printFunction(fn: HIRFunction): string {
         })
         .join(', ') +
       ')';
+  } else {
+    definition += '()';
   }
   if (definition.length !== 0) {
     output.push(definition);
   }
-  output.push(printType(fn.returnType));
-  output.push(printHIR(fn.body));
+  output.push(`: ${printType(fn.returnType)} @ ${printPlace(fn.returns)}`);
   output.push(...fn.directives);
+  output.push(printHIR(fn.body));
   return output.join('\n');
 }
 
@@ -151,7 +157,10 @@ export function printMixedHIR(
 
 export function printInstruction(instr: ReactiveInstruction): string {
   const id = `[${instr.id}]`;
-  const value = printInstructionValue(instr.value);
+  let value = printInstructionValue(instr.value);
+  if (instr.effects != null) {
+    value += `\n    ${instr.effects.map(printAliasingEffect).join('\n    ')}`;
+  }
 
   if (instr.lvalue !== null) {
     return `${id} ${printPlace(instr.lvalue)} = ${value}`;
@@ -546,17 +555,31 @@ export function printInstructionValue(instrValue: ReactiveValue): string {
       const effects =
         instrValue.loweredFunc.func.effects
           ?.map(effect => {
-            if (effect.kind === 'ContextMutation') {
-              return `ContextMutation places=[${[...effect.places]
-                .map(place => printPlace(place))
-                .join(', ')}] effect=${effect.effect}`;
-            } else {
-              return `GlobalMutation`;
+            switch (effect.kind) {
+              case 'ContextMutation': {
+                return `ContextMutation places=[${[...effect.places]
+                  .map(place => printPlace(place))
+                  .join(', ')}] effect=${effect.effect}`;
+              }
+              case 'GlobalMutation': {
+                return 'GlobalMutation';
+              }
+              case 'ReactMutation': {
+                return 'ReactMutation';
+              }
+              case 'CaptureEffect': {
+                return `CaptureEffect places=[${[...effect.places]
+                  .map(place => printPlace(place))
+                  .join(', ')}]`;
+              }
             }
           })
           .join(', ') ?? '';
-      const type = printType(instrValue.loweredFunc.func.returnType).trim();
-      value = `${kind} ${name} @context[${context}] @effects[${effects}]${type !== '' ? ` return${type}` : ''}:\n${fn}`;
+      const aliasingEffects =
+        instrValue.loweredFunc.func.aliasingEffects
+          ?.map(printAliasingEffect)
+          ?.join(', ') ?? '';
+      value = `${kind} ${name} @context[${context}] @effects[${effects}] @aliasingEffects=[${aliasingEffects}]\n${fn}`;
       break;
     }
     case 'TaggedTemplateExpression': {
@@ -720,7 +743,7 @@ function isMutable(range: MutableRange): boolean {
 }
 
 const DEBUG_MUTABLE_RANGES = false;
-function printMutableRange(identifier: Identifier): string {
+export function printMutableRange(identifier: Identifier): string {
   if (DEBUG_MUTABLE_RANGES) {
     // if debugging, print both the identifier and scope range if they differ
     const range = identifier.mutableRange;
@@ -921,4 +944,47 @@ function getFunctionName(
     case 'ObjectMethod':
       return defaultValue;
   }
+}
+
+export function printAliasingEffect(effect: AliasingEffect): string {
+  switch (effect.kind) {
+    case 'Alias': {
+      return `Alias ${printPlaceForAliasEffect(effect.from)} -> ${printPlaceForAliasEffect(effect.into)}`;
+    }
+    case 'Capture': {
+      return `Capture ${printPlaceForAliasEffect(effect.from)} -> ${printPlaceForAliasEffect(effect.into)}`;
+    }
+    case 'Create': {
+      return `Create ${printPlaceForAliasEffect(effect.into)} = ${effect.value}`;
+    }
+    case 'CreateFrom': {
+      return `Create ${printPlaceForAliasEffect(effect.into)} = kindOf(${printPlaceForAliasEffect(effect.from)})`;
+    }
+    case 'Apply': {
+      const params = effect.params.map(printAliasedPlace).join(', ');
+      const rest = effect.rest != null ? printAliasedPlace(effect.rest) : '';
+      const returns = printAliasedPlace(effect.returns);
+      return `Apply ${returns} = ${printAliasedPlace(effect.function)} as ${effect.receiver} ( ${params} ${params.length !== 0 && rest !== '' ? ', ...' : ''}${rest})`;
+    }
+    case 'Freeze': {
+      return `Freeze ${printPlaceForAliasEffect(effect.value)} ${effect.reason}`;
+    }
+    case 'Mutate':
+    case 'MutateConditionally':
+    case 'MutateTransitive':
+    case 'MutateTransitiveConditionally': {
+      return `${effect.kind} ${printPlaceForAliasEffect(effect.value)}`;
+    }
+    default: {
+      assertExhaustive(effect, `Unexpected kind '${(effect as any).kind}'`);
+    }
+  }
+}
+
+function printPlaceForAliasEffect(place: Place): string {
+  return printIdentifier(place.identifier);
+}
+
+function printAliasedPlace(place: AliasedPlace): string {
+  return place.kind + ' ' + printPlaceForAliasEffect(place.place);
 }
