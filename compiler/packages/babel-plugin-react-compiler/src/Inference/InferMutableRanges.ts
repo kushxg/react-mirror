@@ -5,16 +5,21 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import prettyFormat from 'pretty-format';
 import {HIRFunction, Identifier} from '../HIR/HIR';
+import DisjointSet from '../Utils/DisjointSet';
 import {inferAliasForUncalledFunctions} from './InerAliasForUncalledFunctions';
 import {inferAliases} from './InferAlias';
+import {inferAliasForFunctionCaptureEffects} from './InferAliasesForFunctionCaptureEffects';
 import {inferAliasForPhis} from './InferAliasForPhis';
 import {inferAliasForStores} from './InferAliasForStores';
 import {inferMutableLifetimes} from './InferMutableLifetimes';
 import {inferMutableRangesForAlias} from './InferMutableRangesForAlias';
+import {inferMutableRangesForComutation} from './InferMutableRangesForComutation';
 import {inferTryCatchAliases} from './InferTryCatchAliases';
+import {printIdentifier, printMutableRange} from '../HIR/PrintHIR';
 
-export function inferMutableRanges(ir: HIRFunction): void {
+export function inferMutableRanges(ir: HIRFunction): DisjointSet<Identifier> {
   // Infer mutable ranges for non fields
   inferMutableLifetimes(ir, false);
 
@@ -30,18 +35,22 @@ export function inferMutableRanges(ir: HIRFunction): void {
    * Eagerly canonicalize so that if nothing changes we can bail out
    * after a single iteration
    */
-  let prevAliases: Map<Identifier, Identifier> = aliases.canonicalize();
+  let prevAliases: Map<Identifier, string> = canonicalize(aliases);
   while (true) {
     // Infer mutable ranges for aliases that are not fields
     inferMutableRangesForAlias(ir, aliases);
 
+    inferMutableRangesForComutation(ir);
+
     // Update aliasing information of fields
     inferAliasForStores(ir, aliases);
+
+    inferAliasForFunctionCaptureEffects(ir, aliases);
 
     // Update aliasing information of phis
     inferAliasForPhis(ir, aliases);
 
-    const nextAliases = aliases.canonicalize();
+    const nextAliases = canonicalize(aliases);
     if (areEqualMaps(prevAliases, nextAliases)) {
       break;
     }
@@ -73,20 +82,57 @@ export function inferMutableRanges(ir: HIRFunction): void {
    * but does not modify values that `y` "contains" such as the
    * object literal or `z`.
    */
-  prevAliases = aliases.canonicalize();
+  prevAliases = canonicalize(aliases);
   while (true) {
     inferMutableRangesForAlias(ir, aliases);
+    inferMutableRangesForComutation(ir);
     inferAliasForPhis(ir, aliases);
     inferAliasForUncalledFunctions(ir, aliases);
-    const nextAliases = aliases.canonicalize();
+    const nextAliases = canonicalize(aliases);
     if (areEqualMaps(prevAliases, nextAliases)) {
       break;
     }
     prevAliases = nextAliases;
   }
+
+  return aliases;
 }
 
-function areEqualMaps<T>(a: Map<T, T>, b: Map<T, T>): boolean {
+export function debugAliases(aliases: DisjointSet<Identifier>): void {
+  console.log(
+    prettyFormat(
+      aliases
+        .buildSets()
+        .map(set =>
+          [...set].map(
+            ident => printIdentifier(ident) + printMutableRange(ident),
+          ),
+        ),
+    ),
+  );
+}
+
+/**
+ * Canonicalizes the alias set and mutable range information calculated at the current time.
+ * The returned value maps each identifier in the program to the root identifier of its alias
+ * set and the the mutable range of that set.
+ *
+ * This ensures that we fixpoint the mutable ranges themselves and not just the alias sets.
+ */
+export function canonicalize(
+  aliases: DisjointSet<Identifier>,
+): Map<Identifier, string> {
+  const entries = new Map<Identifier, string>();
+  aliases.forEach((item, root) => {
+    entries.set(
+      item,
+      `${root.id}:${root.mutableRange.start}:${root.mutableRange.end}`,
+    );
+  });
+  return entries;
+}
+
+export function areEqualMaps<T, U>(a: Map<T, U>, b: Map<T, U>): boolean {
   if (a.size !== b.size) {
     return false;
   }
