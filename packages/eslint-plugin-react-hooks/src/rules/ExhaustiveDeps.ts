@@ -9,12 +9,14 @@ import type {Rule, Scope} from 'eslint';
 import type {
   ArrayExpression,
   ArrowFunctionExpression,
+  AssignmentProperty,
   CallExpression,
   Expression,
   FunctionDeclaration,
   FunctionExpression,
   Identifier,
   Node,
+  ObjectPattern,
   Pattern,
   PrivateIdentifier,
   Super,
@@ -61,28 +63,45 @@ const rule = {
           enableDangerousAutofixThisMayCauseInfiniteLoops: {
             type: 'boolean',
           },
+          experimental_autoDependenciesHooks: {
+            type: 'array',
+            items: {
+              type: 'string',
+            },
+          },
+          requireExplicitEffectDeps: {
+            type: 'boolean',
+          }
         },
       },
     ],
   },
   create(context: Rule.RuleContext) {
+    const rawOptions = context.options && context.options[0];
+
     // Parse the `additionalHooks` regex.
     const additionalHooks =
-      context.options &&
-      context.options[0] &&
-      context.options[0].additionalHooks
-        ? new RegExp(context.options[0].additionalHooks)
+      rawOptions && rawOptions.additionalHooks
+        ? new RegExp(rawOptions.additionalHooks)
         : undefined;
 
     const enableDangerousAutofixThisMayCauseInfiniteLoops: boolean =
-      (context.options &&
-        context.options[0] &&
-        context.options[0].enableDangerousAutofixThisMayCauseInfiniteLoops) ||
+      (rawOptions &&
+        rawOptions.enableDangerousAutofixThisMayCauseInfiniteLoops) ||
       false;
+
+    const experimental_autoDependenciesHooks: ReadonlyArray<string> =
+      rawOptions && Array.isArray(rawOptions.experimental_autoDependenciesHooks)
+        ? rawOptions.experimental_autoDependenciesHooks
+        : [];
+
+    const requireExplicitEffectDeps: boolean = rawOptions && rawOptions.requireExplicitEffectDeps || false;
 
     const options = {
       additionalHooks,
+      experimental_autoDependenciesHooks,
       enableDangerousAutofixThisMayCauseInfiniteLoops,
+      requireExplicitEffectDeps,
     };
 
     function reportProblem(problem: Rule.ReportDescriptor) {
@@ -162,6 +181,7 @@ const rule = {
       reactiveHook: Node,
       reactiveHookName: string,
       isEffect: boolean,
+      isAutoDepsHook: boolean,
     ): void {
       if (isEffect && node.async) {
         reportProblem({
@@ -203,7 +223,13 @@ const rule = {
         let currentScope = scope.upper;
         while (currentScope) {
           pureScopes.add(currentScope);
-          if (currentScope.type === 'function') {
+          if (
+            currentScope.type === 'function' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'hook' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'component'
+          ) {
             break;
           }
           currentScope = currentScope.upper;
@@ -540,19 +566,30 @@ const rule = {
             continue;
           }
 
-          // Add the dependency to a map so we can make sure it is referenced
-          // again in our dependencies array. Remember whether it's stable.
-          if (!dependencies.has(dependency)) {
-            const resolved = reference.resolved;
-            const isStable =
-              memoizedIsStableKnownHookValue(resolved) ||
-              memoizedIsFunctionWithoutCapturedValues(resolved);
-            dependencies.set(dependency, {
-              isStable,
-              references: [reference],
-            });
-          } else {
-            dependencies.get(dependency)?.references.push(reference);
+          const pattern = destructuredPattern(dependencyNode);
+          const deps = pattern == null ?
+            [dependency] :
+            pattern.properties
+              .filter((prop): prop is AssignmentProperty => prop.type === 'Property')
+              .map((prop) => prop.key)
+              .filter(key => key.type === 'Identifier')
+              .map(key => `${dependency}.${key.name}`);
+
+          for (const dep of deps) {
+            // Add the dependency to a map so we can make sure it is referenced
+            // again in our dependencies array. Remember whether it's stable.
+            if (!dependencies.has(dep)) {
+              const resolved = reference.resolved;
+              const isStable =
+                memoizedIsStableKnownHookValue(resolved) ||
+                memoizedIsFunctionWithoutCapturedValues(resolved);
+              dependencies.set(dep, {
+                isStable,
+                references: [reference],
+              });
+            } else {
+              dependencies.get(dep)?.references.push(reference);
+            }
           }
         }
 
@@ -643,6 +680,9 @@ const rule = {
       }
 
       if (!declaredDependenciesNode) {
+        if (isAutoDepsHook) {
+          return;
+        }
         // Check if there are any top-level setState() calls.
         // Those tend to lead to infinite loops.
         let setStateInsideEffectWithoutDeps: string | null = null;
@@ -703,6 +743,13 @@ const rule = {
             ],
           });
         }
+        return;
+      }
+      if (
+        isAutoDepsHook &&
+        declaredDependenciesNode.type === 'Literal' &&
+        declaredDependenciesNode.value === null
+      ) {
         return;
       }
 
@@ -1312,10 +1359,28 @@ const rule = {
         return;
       }
 
+      if (!maybeNode && isEffect && options.requireExplicitEffectDeps) {
+        reportProblem({
+          node: reactiveHook,
+          message:
+            `React Hook ${reactiveHookName} always requires dependencies. ` +
+            `Please add a dependency array or an explicit \`undefined\``
+        });
+      }
+
+      const isAutoDepsHook =
+        options.experimental_autoDependenciesHooks.includes(reactiveHookName);
+
       // Check the declared dependencies for this reactive hook. If there is no
       // second argument then the reactive callback will re-run on every render.
       // So no need to check for dependency inclusion.
-      if (!declaredDependenciesNode && !isEffect) {
+      if (
+        (!declaredDependenciesNode ||
+          (isAutoDepsHook &&
+            declaredDependenciesNode.type === 'Literal' &&
+            declaredDependenciesNode.value === null)) &&
+        !isEffect
+      ) {
         // These are only used for optimization.
         if (
           reactiveHookName === 'useMemo' ||
@@ -1349,11 +1414,17 @@ const rule = {
             reactiveHook,
             reactiveHookName,
             isEffect,
+            isAutoDepsHook,
           );
           return; // Handled
         case 'Identifier':
-          if (!declaredDependenciesNode) {
-            // No deps, no problems.
+          if (
+            !declaredDependenciesNode ||
+            (isAutoDepsHook &&
+              declaredDependenciesNode.type === 'Literal' &&
+              declaredDependenciesNode.value === null)
+          ) {
+            // Always runs, no problems.
             return; // Handled
           }
           // The function passed as a callback is not written inline.
@@ -1402,6 +1473,7 @@ const rule = {
                 reactiveHook,
                 reactiveHookName,
                 isEffect,
+                isAutoDepsHook,
               );
               return; // Handled
             case 'VariableDeclarator':
@@ -1421,6 +1493,7 @@ const rule = {
                     reactiveHook,
                     reactiveHookName,
                     isEffect,
+                    isAutoDepsHook,
                   );
                   return; // Handled
               }
@@ -1787,11 +1860,15 @@ function scanForConstructions({
 }
 
 /**
- * Assuming () means the passed/returned node:
- * (props) => (props)
- * props.(foo) => (props.foo)
- * props.foo.(bar) => (props).foo.bar
- * props.foo.bar.(baz) => (props).foo.bar.baz
+ * Assuming {} means the passed/returned node and multiple "=>" means recursive calls:
+ * {props} => {props}
+ * {props}.foo => {props.foo}
+ * {props}.foo.bar.baz => {props.foo}.bar.baz => {props.foo.bar}.baz => {props.foo.bar.baz}
+ * props.{foo} => props.{foo}
+ * props.foo.{bar} => props.foo.{bar}
+ * {ref}.current => {ref}.current
+ * {props}.foo() => {props}.foo()
+ * {foo}.bar.baz=123 => {foo.bar}.baz=123
  */
 function getDependency(node: Node): Node {
   if (
@@ -2067,6 +2144,25 @@ function getUnknownDependenciesMessage(reactiveHookName: string): string {
     `React Hook ${reactiveHookName} received a function whose dependencies ` +
     `are unknown. Pass an inline function instead.`
   );
+}
+
+// Retruns ObjectPattern node if the node is destructured into a pattern.
+// Otherwise returns null.
+function destructuredPattern(
+  node: Node
+): ObjectPattern | null {
+  const { parent } = node;
+  if (!parent || parent.type !== 'VariableDeclarator') {
+    return null;
+  }
+  if (parent.init !== node) {
+    return null;
+  }
+  const { id } = parent;
+  if (id.type !== 'ObjectPattern') {
+    return null;
+  }
+  return id;
 }
 
 export default rule;
