@@ -453,8 +453,6 @@ const skipFilter = new Set([
   'inner-function/nullable-objects/bug-invalid-array-map-manual',
   'bug-object-expression-computed-key-modified-during-after-construction-hoisted-sequence-expr',
   `bug-capturing-func-maybealias-captured-mutate`,
-  'bug-aliased-capture-aliased-mutate',
-  'bug-aliased-capture-mutate',
   'bug-functiondecl-hoisting',
   'bug-type-inference-control-flow',
   'fbt/bug-fbt-plural-multiple-function-calls',
@@ -485,6 +483,7 @@ const skipFilter = new Set([
   'todo.lower-context-access-array-destructuring',
   'lower-context-selector-simple',
   'lower-context-acess-multiple',
+  'bug-separate-memoization-due-to-callback-capturing',
 ]);
 
 export default skipFilter;
