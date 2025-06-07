@@ -33,45 +33,17 @@ export const FIXTURE_ENTRYPOINT = {
 
 ```
 
-## Code
 
-```javascript
-import { c as _c } from "react/compiler-runtime";
-import { useEffect, useState } from "react";
-import { Stringify } from "shared-runtime";
-
-function Foo() {
-  const $ = _c(3);
-  let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
-    t0 = [];
-    $[0] = t0;
-  } else {
-    t0 = $[0];
-  }
-  useEffect(() => setState(2), t0);
-
-  const [state, t1] = useState(0);
-  const setState = t1;
-  let t2;
-  if ($[1] !== state) {
-    t2 = <Stringify state={state} />;
-    $[1] = state;
-    $[2] = t2;
-  } else {
-    t2 = $[2];
-  }
-  return t2;
-}
-
-export const FIXTURE_ENTRYPOINT = {
-  fn: Foo,
-  params: [{}],
-  sequentialRenders: [{}, {}],
-};
+## Error
 
 ```
+  18 |   useEffect(() => setState(2), []);
+  19 |
+> 20 |   const [state, setState] = useState(0);
+     |                 ^^^^^^^^ InvalidReact: Updating a value used previously in an effect function or as an effect dependency is not allowed. Consider moving the mutation before calling useEffect(). Found mutation of `setState` (20:20)
+  21 |   return <Stringify state={state} />;
+  22 | }
+  23 |
+```
+          
       
-### Eval output
-(kind: ok) <div>{"state":2}</div>
-<div>{"state":2}</div>
