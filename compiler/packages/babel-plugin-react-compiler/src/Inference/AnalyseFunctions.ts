@@ -10,7 +10,9 @@ import {
   Effect,
   HIRFunction,
   Identifier,
+  IdentifierId,
   LoweredFunction,
+  Place,
   isRefOrRefValue,
   makeInstructionId,
 } from '../HIR';
@@ -19,6 +21,15 @@ import {inferReactiveScopeVariables} from '../ReactiveScopes';
 import {rewriteInstructionKindsBasedOnReassignment} from '../SSA';
 import {inferMutableRanges} from './InferMutableRanges';
 import inferReferenceEffects from './InferReferenceEffects';
+import DisjointSet from '../Utils/DisjointSet';
+import {
+  eachInstructionLValue,
+  eachInstructionValueOperand,
+} from '../HIR/visitors';
+import {assertExhaustive, Iterable_some} from '../Utils/utils';
+import {inferMutationAliasingEffects} from './InferMutationAliasingEffects';
+import {inferMutationAliasingFunctionEffects} from './InferMutationAliasingFunctionEffects';
+import {inferMutationAliasingRanges} from './InferMutationAliasingRanges';
 
 export default function analyseFunctions(func: HIRFunction): void {
   for (const [_, block] of func.body.blocks) {
@@ -26,8 +37,12 @@ export default function analyseFunctions(func: HIRFunction): void {
       switch (instr.value.kind) {
         case 'ObjectMethod':
         case 'FunctionExpression': {
-          lower(instr.value.loweredFunc.func);
-          infer(instr.value.loweredFunc);
+          if (!func.env.config.enableNewMutationAliasingModel) {
+            const aliases = lower(instr.value.loweredFunc.func);
+            infer(instr.value.loweredFunc, aliases);
+          } else {
+            lowerWithMutationAliasing(instr.value.loweredFunc.func);
+          }
 
           /**
            * Reset mutable range for outer inferReferenceEffects
@@ -44,11 +59,82 @@ export default function analyseFunctions(func: HIRFunction): void {
   }
 }
 
-function lower(func: HIRFunction): void {
+function lowerWithMutationAliasing(fn: HIRFunction): void {
+  analyseFunctions(fn);
+  inferMutationAliasingEffects(fn, {isFunctionExpression: true});
+  deadCodeElimination(fn);
+  inferMutationAliasingRanges(fn);
+  rewriteInstructionKindsBasedOnReassignment(fn);
+  inferReactiveScopeVariables(fn);
+  const effects = inferMutationAliasingFunctionEffects(fn);
+  fn.env.logger?.debugLogIRs?.({
+    kind: 'hir',
+    name: 'AnalyseFunction (inner)',
+    value: fn,
+  });
+  if (effects != null) {
+    fn.aliasingEffects ??= [];
+    fn.aliasingEffects?.push(...effects);
+  }
+
+  const capturedOrMutated = new Set<IdentifierId>();
+  for (const effect of effects ?? []) {
+    switch (effect.kind) {
+      case 'Assign':
+      case 'Alias':
+      case 'Capture':
+      case 'CreateFrom': {
+        capturedOrMutated.add(effect.from.identifier.id);
+        break;
+      }
+      case 'Apply': {
+        CompilerError.invariant(false, {
+          reason: `[AnalyzeFunctions] Expected Apply effects to be replaced with more precise effects`,
+          loc: effect.function.loc,
+        });
+      }
+      case 'Mutate':
+      case 'MutateConditionally':
+      case 'MutateTransitive':
+      case 'MutateTransitiveConditionally': {
+        capturedOrMutated.add(effect.value.identifier.id);
+        break;
+      }
+      case 'MutateFrozen':
+      case 'MutateGlobal':
+      case 'CreateFunction':
+      case 'Create':
+      case 'Freeze':
+      case 'ImmutableCapture': {
+        // no-op
+        break;
+      }
+      default: {
+        assertExhaustive(
+          effect,
+          `Unexpected effect kind ${(effect as any).kind}`,
+        );
+      }
+    }
+  }
+
+  for (const operand of fn.context) {
+    if (
+      capturedOrMutated.has(operand.identifier.id) ||
+      operand.effect === Effect.Capture
+    ) {
+      operand.effect = Effect.Capture;
+    } else {
+      operand.effect = Effect.Read;
+    }
+  }
+}
+
+function lower(func: HIRFunction): DisjointSet<Identifier> {
   analyseFunctions(func);
   inferReferenceEffects(func, {isFunctionExpression: true});
   deadCodeElimination(func);
-  inferMutableRanges(func);
+  const aliases = inferMutableRanges(func);
   rewriteInstructionKindsBasedOnReassignment(func);
   inferReactiveScopeVariables(func);
   func.env.logger?.debugLogIRs?.({
@@ -56,9 +142,61 @@ function lower(func: HIRFunction): void {
     name: 'AnalyseFunction (inner)',
     value: func,
   });
+  inferAliasesForCapturing(func, aliases);
+  return aliases ?? new DisjointSet();
 }
 
-function infer(loweredFunc: LoweredFunction): void {
+/**
+ * The alias sets returned by InferMutableRanges() accounts only for aliases that
+ * are known to mutate together. Notably this skips cases where a value is captured
+ * into some other value, but neither is subsequently mutated. An example is pushing
+ * a mutable value onto an array, where neither the array or value are subsequently
+ * mutated.
+ *
+ * This function extends the aliases sets to account for such capturing, so that we
+ * can detect cases where one of the values in a set is mutated later (in an outer function)
+ * we can correctly infer them as mutating together.
+ */
+function inferAliasesForCapturing(
+  fn: HIRFunction,
+  aliases: DisjointSet<Identifier>,
+): void {
+  for (const block of fn.body.blocks.values()) {
+    for (const instr of block.instructions) {
+      const {lvalue, value} = instr;
+      const hasCapture =
+        lvalue.effect === Effect.Store ||
+        Iterable_some(
+          eachInstructionValueOperand(value),
+          operand => operand.effect === Effect.Capture,
+        );
+      if (!hasCapture) {
+        continue;
+      }
+      const operands: Array<Identifier> = [];
+      for (const lvalue of eachInstructionLValue(instr)) {
+        operands.push(lvalue.identifier);
+      }
+      for (const operand of eachInstructionValueOperand(instr.value)) {
+        if (
+          operand.effect === Effect.Store ||
+          operand.effect === Effect.Mutate ||
+          operand.effect === Effect.Capture
+        ) {
+          operands.push(operand.identifier);
+        }
+      }
+      if (operands.length > 1) {
+        aliases.union(operands);
+      }
+    }
+  }
+}
+
+function infer(
+  loweredFunc: LoweredFunction,
+  aliases: DisjointSet<Identifier>,
+): void {
   for (const operand of loweredFunc.func.context) {
     const identifier = operand.identifier;
     CompilerError.invariant(operand.effect === Effect.Unknown, {
@@ -83,6 +221,23 @@ function infer(loweredFunc: LoweredFunction): void {
       operand.effect = Effect.Capture;
     } else {
       operand.effect = Effect.Read;
+    }
+  }
+  const contextIdentifiers = new Map(
+    loweredFunc.func.context.map(place => [place.identifier, place]),
+  );
+  for (const set of aliases.buildSets()) {
+    const contextOperands: Set<Place> = new Set(
+      [...set]
+        .map(identifier => contextIdentifiers.get(identifier))
+        .filter(place => place != null) as Array<Place>,
+    );
+    if (contextOperands.size !== 0) {
+      loweredFunc.func.effects ??= [];
+      loweredFunc.func.effects?.push({
+        kind: 'CaptureEffect',
+        places: contextOperands,
+      });
     }
   }
 }
