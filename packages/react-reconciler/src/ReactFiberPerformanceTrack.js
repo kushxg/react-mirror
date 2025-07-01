@@ -26,30 +26,28 @@ import {
   includesOnlyHydrationOrOffscreenLanes,
 } from './ReactFiberLane';
 
+import {
+  addValueToProperties,
+  addObjectToProperties,
+  addObjectDiffToProperties,
+} from 'shared/ReactPerformanceTrackProperties';
+
 import {enableProfilerTimer} from 'shared/ReactFeatureFlags';
 
 const supportsUserTiming =
   enableProfilerTimer &&
   typeof console !== 'undefined' &&
-  typeof console.timeStamp === 'function';
+  typeof console.timeStamp === 'function' &&
+  (!__DEV__ ||
+    // In DEV we also rely on performance.measure
+    (typeof performance !== 'undefined' &&
+      // $FlowFixMe[method-unbinding]
+      typeof performance.measure === 'function'));
 
 const COMPONENTS_TRACK = 'Components ⚛';
 const LANES_TRACK_GROUP = 'Scheduler ⚛';
 
 let currentTrack: string = 'Blocking'; // Lane
-
-const reusableLaneDevToolDetails = {
-  color: 'primary',
-  track: 'Blocking', // Lane
-  trackGroup: LANES_TRACK_GROUP,
-};
-const reusableLaneOptions = {
-  start: -0,
-  end: -0,
-  detail: {
-    devtools: reusableLaneDevToolDetails,
-  },
-};
 
 export function setCurrentTrackFromLanes(lanes: Lanes): void {
   currentTrack = getGroupNameOfHighestPriorityLane(lanes);
@@ -161,6 +159,21 @@ export function logComponentDisappeared(
   logComponentTrigger(fiber, startTime, endTime, 'Disconnect');
 }
 
+const reusableComponentDevToolDetails = {
+  color: 'primary',
+  properties: (null: null | Array<[string, string]>),
+  track: COMPONENTS_TRACK,
+};
+const reusableComponentOptions = {
+  start: -0,
+  end: -0,
+  detail: {
+    devtools: reusableComponentDevToolDetails,
+  },
+};
+
+const resuableChangedPropsEntry = ['Changed Props', ''];
+
 export function logComponentRender(
   fiber: Fiber,
   startTime: number,
@@ -173,8 +186,9 @@ export function logComponentRender(
     return;
   }
   if (supportsUserTiming) {
+    const alternate = fiber.alternate;
     let selfTime: number = (fiber.actualDuration: any);
-    if (fiber.alternate === null || fiber.alternate.child !== fiber.child) {
+    if (alternate === null || alternate.child !== fiber.child) {
       for (let child = fiber.child; child !== null; child = child.sibling) {
         selfTime -= (child.actualDuration: any);
       }
@@ -195,6 +209,36 @@ export function logComponentRender(
             : 'error';
     const debugTask = fiber._debugTask;
     if (__DEV__ && debugTask) {
+      const props = fiber.memoizedProps;
+      if (
+        props !== null &&
+        alternate !== null &&
+        alternate.memoizedProps !== props
+      ) {
+        // If this is an update, we'll diff the props and emit which ones changed.
+        const properties: Array<[string, string]> = [resuableChangedPropsEntry];
+        addObjectDiffToProperties(
+          alternate.memoizedProps,
+          props,
+          properties,
+          0,
+        );
+        if (properties.length > 1) {
+          reusableComponentOptions.start = startTime;
+          reusableComponentOptions.end = endTime;
+          reusableComponentDevToolDetails.color = color;
+          reusableComponentDevToolDetails.properties = properties;
+          debugTask.run(
+            // $FlowFixMe[method-unbinding]
+            performance.measure.bind(
+              performance,
+              name,
+              reusableComponentOptions,
+            ),
+          );
+          return;
+        }
+      }
       debugTask.run(
         // $FlowFixMe[method-unbinding]
         console.timeStamp.bind(
@@ -232,14 +276,9 @@ export function logComponentErrored(
       // Skip
       return;
     }
-    if (
-      __DEV__ &&
-      typeof performance !== 'undefined' &&
-      // $FlowFixMe[method-unbinding]
-      typeof performance.measure === 'function'
-    ) {
+    if (__DEV__) {
       let debugTask: ?ConsoleTask = null;
-      const properties = [];
+      const properties: Array<[string, string]> = [];
       for (let i = 0; i < errors.length; i++) {
         const capturedValue = errors[i];
         if (debugTask == null && capturedValue.source !== null) {
@@ -260,6 +299,12 @@ export function logComponentErrored(
             : // eslint-disable-next-line react-internal/safe-string-coercion
               String(error);
         properties.push(['Error', message]);
+      }
+      if (fiber.key !== null) {
+        addValueToProperties('key', fiber.key, properties, 0, '');
+      }
+      if (fiber.memoizedProps !== null) {
+        addObjectToProperties(fiber.memoizedProps, properties, 0, '');
       }
       if (debugTask == null) {
         // If the captured values don't have a debug task, fallback to the
@@ -314,13 +359,8 @@ function logComponentEffectErrored(
       // Skip
       return;
     }
-    if (
-      __DEV__ &&
-      typeof performance !== 'undefined' &&
-      // $FlowFixMe[method-unbinding]
-      typeof performance.measure === 'function'
-    ) {
-      const properties = [];
+    if (__DEV__) {
+      const properties: Array<[string, string]> = [];
       for (let i = 0; i < errors.length; i++) {
         const capturedValue = errors[i];
         const error = capturedValue.value;
@@ -333,6 +373,12 @@ function logComponentEffectErrored(
             : // eslint-disable-next-line react-internal/safe-string-coercion
               String(error);
         properties.push(['Error', message]);
+      }
+      if (fiber.key !== null) {
+        addValueToProperties('key', fiber.key, properties, 0, '');
+      }
+      if (fiber.memoizedProps !== null) {
+        addObjectToProperties(fiber.memoizedProps, properties, 0, '');
       }
       const options = {
         start: startTime,
@@ -798,13 +844,8 @@ export function logRecoveredRenderPhase(
   hydrationFailed: boolean,
 ): void {
   if (supportsUserTiming) {
-    if (
-      __DEV__ &&
-      typeof performance !== 'undefined' &&
-      // $FlowFixMe[method-unbinding]
-      typeof performance.measure === 'function'
-    ) {
-      const properties = [];
+    if (__DEV__) {
+      const properties: Array<[string, string]> = [];
       for (let i = 0; i < recoverableErrors.length; i++) {
         const capturedValue = recoverableErrors[i];
         const error = capturedValue.value;
@@ -922,13 +963,8 @@ export function logCommitErrored(
   passive: boolean,
 ): void {
   if (supportsUserTiming) {
-    if (
-      __DEV__ &&
-      typeof performance !== 'undefined' &&
-      // $FlowFixMe[method-unbinding]
-      typeof performance.measure === 'function'
-    ) {
-      const properties = [];
+    if (__DEV__) {
+      const properties: Array<[string, string]> = [];
       for (let i = 0; i < errors.length; i++) {
         const capturedValue = errors[i];
         const error = capturedValue.value;
@@ -980,8 +1016,6 @@ export function logCommitPhase(
     return;
   }
   if (supportsUserTiming) {
-    reusableLaneOptions.start = startTime;
-    reusableLaneOptions.end = endTime;
     console.timeStamp(
       'Commit',
       startTime,
