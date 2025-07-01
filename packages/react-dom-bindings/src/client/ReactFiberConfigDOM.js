@@ -1549,6 +1549,19 @@ export function cancelRootViewTransitionName(rootContainer: Container): void {
     rootContainer.nodeType === DOCUMENT_NODE
       ? (rootContainer: any).documentElement
       : rootContainer.ownerDocument.documentElement;
+
+  if (
+    !disableCommentsAsDOMContainers &&
+    rootContainer.nodeType === COMMENT_NODE
+  ) {
+    if (__DEV__) {
+      console.warn(
+        'Cannot cancel root view transition on a comment node. All view transitions will be globally scoped.',
+      );
+    }
+    return;
+  }
+
   if (
     documentElement !== null &&
     // $FlowFixMe[prop-missing]
@@ -1593,8 +1606,16 @@ export function restoreRootViewTransitionName(rootContainer: Container): void {
     // clone the whole document outside of the React too.
     containerInstance = (rootContainer: any);
   }
-  // $FlowFixMe[prop-missing]
-  if (containerInstance.style.viewTransitionName === 'root') {
+  if (
+    !disableCommentsAsDOMContainers &&
+    containerInstance.nodeType === COMMENT_NODE
+  ) {
+    return;
+  }
+  if (
+    // $FlowFixMe[prop-missing]
+    containerInstance.style.viewTransitionName === 'root'
+  ) {
     // If we moved the root view transition name to the container in a gesture
     // we need to restore it now.
     containerInstance.style.viewTransitionName = '';
@@ -1708,6 +1729,13 @@ export function cloneRootViewTransitionContainer(
     containerInstance = (rootContainer: any).body;
   } else if (rootContainer.nodeName === 'HTML') {
     containerInstance = (rootContainer.ownerDocument.body: any);
+  } else if (
+    !disableCommentsAsDOMContainers &&
+    rootContainer.nodeType === COMMENT_NODE
+  ) {
+    throw new Error(
+      'Cannot use a startGestureTransition() with a comment node root.',
+    );
   } else {
     // If the container is not the whole document, then we ideally should probably
     // clone the whole document outside of the React too.
@@ -2105,6 +2133,84 @@ export function startViewTransition(
     });
     // $FlowFixMe[prop-missing]
     ownerDocument.__reactViewTransition = transition;
+
+    const readyCallback = () => {
+      const documentElement: Element = (ownerDocument.documentElement: any);
+      // Loop through all View Transition Animations.
+      const animations = documentElement.getAnimations({subtree: true});
+      for (let i = 0; i < animations.length; i++) {
+        const animation = animations[i];
+        const effect: KeyframeEffect = (animation.effect: any);
+        // $FlowFixMe
+        const pseudoElement: ?string = effect.pseudoElement;
+        if (
+          pseudoElement != null &&
+          pseudoElement.startsWith('::view-transition')
+        ) {
+          const keyframes = effect.getKeyframes();
+          // Next, we're going to try to optimize this animation in case the auto-generated
+          // width/height keyframes are unnecessary.
+          let width;
+          let height;
+          let unchangedDimensions = true;
+          for (let j = 0; j < keyframes.length; j++) {
+            const keyframe = keyframes[j];
+            const w = keyframe.width;
+            if (width === undefined) {
+              width = w;
+            } else if (width !== w) {
+              unchangedDimensions = false;
+              break;
+            }
+            const h = keyframe.height;
+            if (height === undefined) {
+              height = h;
+            } else if (height !== h) {
+              unchangedDimensions = false;
+              break;
+            }
+            // We're clearing the keyframes in case we are going to apply the optimization.
+            delete keyframe.width;
+            delete keyframe.height;
+            if (keyframe.transform === 'none') {
+              delete keyframe.transform;
+            }
+          }
+          if (
+            unchangedDimensions &&
+            width !== undefined &&
+            height !== undefined
+          ) {
+            // Replace the keyframes with ones that don't animate the width/height.
+            // $FlowFixMe
+            effect.setKeyframes(keyframes);
+            // Read back the new animation to see what the underlying width/height of the pseudo-element was.
+            const computedStyle = getComputedStyle(
+              // $FlowFixMe
+              effect.target,
+              // $FlowFixMe
+              effect.pseudoElement,
+            );
+            if (
+              computedStyle.width !== width ||
+              computedStyle.height !== height
+            ) {
+              // Oops. Turns out that the pseudo-element had a different width/height so we need to let it
+              // be overridden. Add it back.
+              const first = keyframes[0];
+              first.width = width;
+              first.height = height;
+              const last = keyframes[keyframes.length - 1];
+              last.width = width;
+              last.height = height;
+              // $FlowFixMe
+              effect.setKeyframes(keyframes);
+            }
+          }
+        }
+      }
+      spawnedWorkCallback();
+    };
     const handleError = (error: mixed) => {
       try {
         error = customizeViewTransitionError(error, false);
@@ -2122,7 +2228,7 @@ export function startViewTransition(
         spawnedWorkCallback();
       }
     };
-    transition.ready.then(spawnedWorkCallback, handleError);
+    transition.ready.then(readyCallback, handleError);
     transition.finished.finally(() => {
       cancelAllViewTransitionAnimations((ownerDocument.documentElement: any));
       // $FlowFixMe[prop-missing]
@@ -2191,11 +2297,26 @@ function animateGesture(
   moveFirstFrameIntoViewport: boolean,
   moveAllFramesIntoViewport: boolean,
 ) {
+  let width;
+  let height;
+  let unchangedDimensions = true;
   for (let i = 0; i < keyframes.length; i++) {
     const keyframe = keyframes[i];
     // Delete any easing since we always apply linear easing to gestures.
     delete keyframe.easing;
     delete keyframe.computedOffset;
+    const w = keyframe.width;
+    if (width === undefined) {
+      width = w;
+    } else if (width !== w) {
+      unchangedDimensions = false;
+    }
+    const h = keyframe.height;
+    if (height === undefined) {
+      height = h;
+    } else if (height !== h) {
+      unchangedDimensions = false;
+    }
     // Chrome returns "auto" for width/height which is not a valid value to
     // animate to. Similarly, transform: "none" is actually lack of transform.
     if (keyframe.width === 'auto') {
@@ -2244,6 +2365,19 @@ function animateGesture(
     // keyframe. Otherwise it applies to every keyframe.
     moveOldFrameIntoViewport(keyframes[0]);
   }
+  if (unchangedDimensions && width !== undefined && height !== undefined) {
+    // Read the underlying width/height of the pseudo-element. The previous animation
+    // should have already been cancelled so we should observe the underlying element.
+    const computedStyle = getComputedStyle(targetElement, pseudoElement);
+    if (computedStyle.width === width && computedStyle.height === height) {
+      for (let i = 0; i < keyframes.length; i++) {
+        const keyframe = keyframes[i];
+        delete keyframe.width;
+        delete keyframe.height;
+      }
+    }
+  }
+
   // TODO: Reverse the reverse if the original direction is reverse.
   const reverse = rangeStart > rangeEnd;
   targetElement.animate(keyframes, {
@@ -3045,19 +3179,19 @@ export function updateFragmentInstanceFiber(
 }
 
 export function commitNewChildToFragmentInstance(
-  childElement: Instance,
+  childInstance: Instance,
   fragmentInstance: FragmentInstanceType,
 ): void {
   const eventListeners = fragmentInstance._eventListeners;
   if (eventListeners !== null) {
     for (let i = 0; i < eventListeners.length; i++) {
       const {type, listener, optionsOrUseCapture} = eventListeners[i];
-      childElement.addEventListener(type, listener, optionsOrUseCapture);
+      childInstance.addEventListener(type, listener, optionsOrUseCapture);
     }
   }
   if (fragmentInstance._observers !== null) {
     fragmentInstance._observers.forEach(observer => {
-      observer.observe(childElement);
+      observer.observe(childInstance);
     });
   }
 }
