@@ -197,6 +197,7 @@ function makeManualMemoizationMarkers(
         deps: depsList,
         loc: fnExpr.loc,
       },
+      effects: null,
       loc: fnExpr.loc,
     },
     {
@@ -208,6 +209,7 @@ function makeManualMemoizationMarkers(
         decl: {...memoDecl},
         loc: fnExpr.loc,
       },
+      effects: null,
       loc: fnExpr.loc,
     },
   ];
@@ -388,6 +390,10 @@ export function dropManualMemoization(func: HIRFunction): void {
             manualMemo.kind,
             sidemap,
           );
+          if (depsList && depsList.length > 0) {
+            // skip optimization, keep useMemo as is
+            continue;
+          }
           instr.value = getManualMemoizationReplacement(
             fnPlace,
             instr.value.loc,
