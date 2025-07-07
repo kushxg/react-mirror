@@ -16,10 +16,7 @@ import {
 } from 'shared/ReactSymbols';
 import {checkKeyStringCoercion} from 'shared/CheckStringCoercion';
 import isArray from 'shared/isArray';
-import {
-  disableDefaultPropsExceptForClasses,
-  ownerStackLimit,
-} from 'shared/ReactFeatureFlags';
+import {ownerStackLimit} from 'shared/ReactFeatureFlags';
 
 const createTask =
   // eslint-disable-next-line react-internal/no-production-logging
@@ -66,7 +63,7 @@ function UnknownOwner() {
   return (() => Error('react-stack-top-frame'))();
 }
 const createFakeCallStack = {
-  'react-stack-bottom-frame': function (callStackForError) {
+  react_stack_bottom_frame: function (callStackForError) {
     return callStackForError();
   },
 };
@@ -81,7 +78,7 @@ if (__DEV__) {
   didWarnAboutElementRef = {};
 
   // We use this technique to trick minifiers to preserve the function name.
-  unknownOwnerDebugStack = createFakeCallStack['react-stack-bottom-frame'].bind(
+  unknownOwnerDebugStack = createFakeCallStack.react_stack_bottom_frame.bind(
     createFakeCallStack,
     UnknownOwner,
   )();
@@ -351,18 +348,6 @@ export function jsxProd(type, config, maybeKey) {
     }
   }
 
-  if (!disableDefaultPropsExceptForClasses) {
-    // Resolve default props
-    if (type && type.defaultProps) {
-      const defaultProps = type.defaultProps;
-      for (const propName in defaultProps) {
-        if (props[propName] === undefined) {
-          props[propName] = defaultProps[propName];
-        }
-      }
-    }
-  }
-
   return ReactElement(
     type,
     key,
@@ -397,7 +382,6 @@ export function jsxProdSignatureRunningInDevWithDynamicChildren(
   if (__DEV__) {
     const isStaticChildren = false;
     const trackActualOwner =
-      __DEV__ &&
       ReactSharedInternals.recentlyCreatedOwnerStacks++ < ownerStackLimit;
     return jsxDEVImpl(
       type,
@@ -406,14 +390,12 @@ export function jsxProdSignatureRunningInDevWithDynamicChildren(
       isStaticChildren,
       source,
       self,
-      __DEV__ &&
-        (trackActualOwner
+      trackActualOwner
           ? Error('react-stack-top-frame')
-          : unknownOwnerDebugStack),
-      __DEV__ &&
-        (trackActualOwner
+          : unknownOwnerDebugStack,
+      trackActualOwner
           ? createTask(getTaskName(type))
-          : unknownOwnerDebugTask),
+          : unknownOwnerDebugTask,
     );
   }
 }
@@ -594,18 +576,6 @@ function jsxDEVImpl(
         // Skip over reserved prop names
         if (propName !== 'key') {
           props[propName] = config[propName];
-        }
-      }
-    }
-
-    if (!disableDefaultPropsExceptForClasses) {
-      // Resolve default props
-      if (type && type.defaultProps) {
-        const defaultProps = type.defaultProps;
-        for (const propName in defaultProps) {
-          if (props[propName] === undefined) {
-            props[propName] = defaultProps[propName];
-          }
         }
       }
     }
@@ -817,14 +787,6 @@ export function cloneElement(element, config, children) {
     }
 
     // Remaining properties override existing props
-    let defaultProps;
-    if (
-      !disableDefaultPropsExceptForClasses &&
-      element.type &&
-      element.type.defaultProps
-    ) {
-      defaultProps = element.type.defaultProps;
-    }
     for (propName in config) {
       if (
         hasOwnProperty.call(config, propName) &&
@@ -843,16 +805,7 @@ export function cloneElement(element, config, children) {
         // backwards compatibility.
         !(propName === 'ref' && config.ref === undefined)
       ) {
-        if (
-          !disableDefaultPropsExceptForClasses &&
-          config[propName] === undefined &&
-          defaultProps !== undefined
-        ) {
-          // Resolve default props
-          props[propName] = defaultProps[propName];
-        } else {
-          props[propName] = config[propName];
-        }
+        props[propName] = config[propName];
       }
     }
   }
