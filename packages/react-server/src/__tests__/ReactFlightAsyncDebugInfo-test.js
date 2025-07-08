@@ -863,7 +863,7 @@ describe('ReactFlightAsyncDebugInfo', () => {
             "awaited": {
               "end": 0,
               "env": "Server",
-              "name": "",
+              "name": "setTimeout",
               "owner": {
                 "env": "Server",
                 "key": null,
@@ -880,6 +880,16 @@ describe('ReactFlightAsyncDebugInfo', () => {
                   ],
                 ],
               },
+              "stack": [
+                [
+                  "Component",
+                  "/packages/react-server/src/__tests__/ReactFlightAsyncDebugInfo-test.js",
+                  811,
+                  7,
+                  809,
+                  5,
+                ],
+              ],
               "start": 0,
             },
             "env": "Server",
