@@ -49,7 +49,7 @@ function getMethodCallName(callSite: CallSite): string {
   return result;
 }
 
-function collectStackTrace(
+function collectStackTracePrivate(
   error: Error,
   structuredStackTrace: CallSite[],
 ): string {
@@ -59,7 +59,7 @@ function collectStackTrace(
   for (let i = framesToSkip; i < structuredStackTrace.length; i++) {
     const callSite = structuredStackTrace[i];
     let name = callSite.getFunctionName() || '<anonymous>';
-    if (name === 'react-stack-bottom-frame') {
+    if (name.includes('react_stack_bottom_frame')) {
       // Skip everything after the bottom frame since it'll be internals.
       break;
     } else if (callSite.isNative()) {
@@ -79,11 +79,11 @@ function collectStackTrace(
       let filename = callSite.getScriptNameOrSourceURL() || '<anonymous>';
       if (filename === '<anonymous>') {
         filename = '';
-      }
-      if (callSite.isEval() && !filename) {
-        const origin = callSite.getEvalOrigin();
-        if (origin) {
-          filename = origin.toString() + ', <anonymous>';
+        if (callSite.isEval()) {
+          const origin = callSite.getEvalOrigin();
+          if (origin) {
+            filename = origin.toString() + ', <anonymous>';
+          }
         }
       }
       const line = callSite.getLineNumber() || 0;
@@ -101,6 +101,15 @@ function collectStackTrace(
       result.push([name, filename, line, col, enclosingLine, enclosingCol]);
     }
   }
+  collectedStackTrace = result;
+  return '';
+}
+
+function collectStackTrace(
+  error: Error,
+  structuredStackTrace: CallSite[],
+): string {
+  collectStackTracePrivate(error, structuredStackTrace);
   // At the same time we generate a string stack trace just in case someone
   // else reads it. Ideally, we'd call the previous prepareStackTrace to
   // ensure it's in the expected format but it's common for that to be
@@ -115,7 +124,6 @@ function collectStackTrace(
   for (let i = 0; i < structuredStackTrace.length; i++) {
     stack += '\n    at ' + structuredStackTrace[i].toString();
   }
-  collectedStackTrace = result;
   return stack;
 }
 
@@ -126,10 +134,42 @@ function collectStackTrace(
 const frameRegExp =
   /^ {3} at (?:(.+) \((?:(.+):(\d+):(\d+)|\<anonymous\>)\)|(?:async )?(.+):(\d+):(\d+)|\<anonymous\>)$/;
 
+// DEV-only cache of parsed and filtered stack frames.
+const stackTraceCache: WeakMap<Error, ReactStackTrace> = __DEV__
+  ? new WeakMap()
+  : (null: any);
+
+// This version is only used when React fully owns the Error object and there's no risk of it having
+// been already initialized and no risky that anyone else will initialize it later.
+export function parseStackTracePrivate(
+  error: Error,
+  skipFrames: number,
+): null | ReactStackTrace {
+  collectedStackTrace = null;
+  framesToSkip = skipFrames;
+  const previousPrepare = Error.prepareStackTrace;
+  Error.prepareStackTrace = collectStackTracePrivate;
+  try {
+    if (error.stack !== '') {
+      return null;
+    }
+  } finally {
+    Error.prepareStackTrace = previousPrepare;
+  }
+  return collectedStackTrace;
+}
+
 export function parseStackTrace(
   error: Error,
   skipFrames: number,
 ): ReactStackTrace {
+  // We can only get structured data out of error objects once. So we cache the information
+  // so we can get it again each time. It also helps performance when the same error is
+  // referenced more than once.
+  const existing = stackTraceCache.get(error);
+  if (existing !== undefined) {
+    return existing;
+  }
   // We override Error.prepareStackTrace with our own version that collects
   // the structured data. We need more information than the raw stack gives us
   // and we need to ensure that we don't get the source mapped version.
@@ -148,6 +188,7 @@ export function parseStackTrace(
   if (collectedStackTrace !== null) {
     const result = collectedStackTrace;
     collectedStackTrace = null;
+    stackTraceCache.set(error, result);
     return result;
   }
 
@@ -161,7 +202,7 @@ export function parseStackTrace(
     // don't want/need.
     stack = stack.slice(29);
   }
-  let idx = stack.indexOf('react-stack-bottom-frame');
+  let idx = stack.indexOf('react_stack_bottom_frame');
   if (idx !== -1) {
     idx = stack.lastIndexOf('\n', idx);
   }
@@ -191,5 +232,6 @@ export function parseStackTrace(
     const col = +(parsed[4] || parsed[7]);
     parsedFrames.push([name, filename, line, col, 0, 0]);
   }
+  stackTraceCache.set(error, parsedFrames);
   return parsedFrames;
 }
