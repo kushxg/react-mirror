@@ -50,6 +50,7 @@ import {
   gt,
   gte,
   parseSourceFromComponentStack,
+  parseSourceFromOwnerStack,
   serializeToString,
 } from 'react-devtools-shared/src/backend/utils';
 import {
@@ -144,7 +145,7 @@ import type {
   ElementType,
   Plugins,
 } from 'react-devtools-shared/src/frontend/types';
-import type {Source} from 'react-devtools-shared/src/shared/types';
+import type {ReactFunctionLocation} from 'shared/ReactTypes';
 import {getSourceLocationByFiber} from './DevToolsFiberComponentStack';
 import {formatOwnerStack} from '../shared/DevToolsOwnerStack';
 
@@ -161,7 +162,7 @@ type FiberInstance = {
   parent: null | DevToolsInstance,
   firstChild: null | DevToolsInstance,
   nextSibling: null | DevToolsInstance,
-  source: null | string | Error | Source, // source location of this component function, or owned child stack
+  source: null | string | Error | ReactFunctionLocation, // source location of this component function, or owned child stack
   logCount: number, // total number of errors/warnings last seen
   treeBaseDuration: number, // the profiled time of the last render of this subtree
   data: Fiber, // one of a Fiber pair
@@ -189,7 +190,7 @@ type FilteredFiberInstance = {
   parent: null | DevToolsInstance,
   firstChild: null | DevToolsInstance,
   nextSibling: null | DevToolsInstance,
-  source: null | string | Error | Source, // always null here.
+  source: null | string | Error | ReactFunctionLocation, // always null here.
   logCount: number, // total number of errors/warnings last seen
   treeBaseDuration: number, // the profiled time of the last render of this subtree
   data: Fiber, // one of a Fiber pair
@@ -221,7 +222,7 @@ type VirtualInstance = {
   parent: null | DevToolsInstance,
   firstChild: null | DevToolsInstance,
   nextSibling: null | DevToolsInstance,
-  source: null | string | Error | Source, // source location of this server component, or owned child stack
+  source: null | string | Error | ReactFunctionLocation, // source location of this server component, or owned child stack
   logCount: number, // total number of errors/warnings last seen
   treeBaseDuration: number, // the profiled time of the last render of this subtree
   // The latest info for this instance. This can be updated over time and the
@@ -4373,8 +4374,6 @@ export function attach(
           (fiber.alternate !== null &&
             forceFallbackForFibers.has(fiber.alternate))),
 
-      // Can view component source location.
-      canViewSource,
       source,
 
       // Does the component have legacy context attached to it.
@@ -4415,7 +4414,6 @@ export function attach(
   function inspectVirtualInstanceRaw(
     virtualInstance: VirtualInstance,
   ): InspectedElement | null {
-    const canViewSource = true;
     const source = getSourceForInstance(virtualInstance);
 
     const componentInfo = virtualInstance.data;
@@ -4469,8 +4467,6 @@ export function attach(
 
       canToggleSuspense: supportsTogglingSuspense && hasSuspenseBoundary,
 
-      // Can view component source location.
-      canViewSource,
       source,
 
       // Does the component have legacy context attached to it.
@@ -5804,16 +5800,14 @@ export function attach(
 
   function getSourceForFiberInstance(
     fiberInstance: FiberInstance,
-  ): Source | null {
-    const unresolvedSource = fiberInstance.source;
-    if (
-      unresolvedSource !== null &&
-      typeof unresolvedSource === 'object' &&
-      !isError(unresolvedSource)
-    ) {
-      // $FlowFixMe: isError should have refined it.
-      return unresolvedSource;
+  ): ReactFunctionLocation | null {
+    // Favor the owner source if we have one.
+    const ownerSource = getSourceForInstance(fiberInstance);
+    if (ownerSource !== null) {
+      return ownerSource;
     }
+
+    // Otherwise fallback to the throwing trick.
     const dispatcherRef = getDispatcherRef(renderer);
     const stackFrame =
       dispatcherRef == null
@@ -5824,22 +5818,29 @@ export function attach(
             dispatcherRef,
           );
     if (stackFrame === null) {
-      // If we don't find a source location by throwing, try to get one
-      // from an owned child if possible. This is the same branch as
-      // for virtual instances.
-      return getSourceForInstance(fiberInstance);
+      return null;
     }
     const source = parseSourceFromComponentStack(stackFrame);
     fiberInstance.source = source;
     return source;
   }
 
-  function getSourceForInstance(instance: DevToolsInstance): Source | null {
+  function getSourceForInstance(
+    instance: DevToolsInstance,
+  ): ReactFunctionLocation | null {
     let unresolvedSource = instance.source;
     if (unresolvedSource === null) {
       // We don't have any source yet. We can try again later in case an owned child mounts later.
       // TODO: We won't have any information here if the child is filtered.
       return null;
+    }
+
+    if (instance.kind === VIRTUAL_INSTANCE) {
+      // We might have found one on the virtual instance.
+      const debugLocation = instance.data.debugLocation;
+      if (debugLocation != null) {
+        unresolvedSource = debugLocation;
+      }
     }
 
     // If we have the debug stack (the creation stack of the JSX) for any owned child of this
@@ -5848,7 +5849,9 @@ export function attach(
     // any intermediate utility functions. This won't point to the top of the component function
     // but it's at least somewhere within it.
     if (isError(unresolvedSource)) {
-      unresolvedSource = formatOwnerStack((unresolvedSource: any));
+      return (instance.source = parseSourceFromOwnerStack(
+        (unresolvedSource: any),
+      ));
     }
     if (typeof unresolvedSource === 'string') {
       const idx = unresolvedSource.lastIndexOf('\n');
@@ -5859,6 +5862,86 @@ export function attach(
 
     // $FlowFixMe: refined.
     return unresolvedSource;
+  }
+
+  type InternalMcpFunctions = {
+    __internal_only_getComponentTree?: Function,
+  };
+
+  const internalMcpFunctions: InternalMcpFunctions = {};
+  if (__IS_INTERNAL_MCP_BUILD__) {
+    // eslint-disable-next-line no-inner-declarations
+    function __internal_only_getComponentTree(): string {
+      let treeString = '';
+
+      function buildTreeString(
+        instance: DevToolsInstance,
+        prefix: string = '',
+        isLastChild: boolean = true,
+      ): void {
+        if (!instance) return;
+
+        const name =
+          (instance.kind !== VIRTUAL_INSTANCE
+            ? getDisplayNameForFiber(instance.data)
+            : instance.data.name) || 'Unknown';
+
+        const id = instance.id !== undefined ? instance.id : 'unknown';
+
+        if (name !== 'createRoot()') {
+          treeString +=
+            prefix +
+            (isLastChild ? '└── ' : '├── ') +
+            name +
+            ' (id: ' +
+            id +
+            ')\n';
+        }
+
+        const childPrefix = prefix + (isLastChild ? '    ' : '│   ');
+
+        let childCount = 0;
+        let tempChild = instance.firstChild;
+        while (tempChild !== null) {
+          childCount++;
+          tempChild = tempChild.nextSibling;
+        }
+
+        let child = instance.firstChild;
+        let currentChildIndex = 0;
+
+        while (child !== null) {
+          currentChildIndex++;
+          const isLastSibling = currentChildIndex === childCount;
+          buildTreeString(child, childPrefix, isLastSibling);
+          child = child.nextSibling;
+        }
+      }
+
+      const rootInstances: Array<DevToolsInstance> = [];
+      idToDevToolsInstanceMap.forEach(instance => {
+        if (instance.parent === null || instance.parent.parent === null) {
+          rootInstances.push(instance);
+        }
+      });
+
+      if (rootInstances.length > 0) {
+        for (let i = 0; i < rootInstances.length; i++) {
+          const isLast = i === rootInstances.length - 1;
+          buildTreeString(rootInstances[i], '', isLast);
+          if (!isLast) {
+            treeString += '\n';
+          }
+        }
+      } else {
+        treeString = 'No component tree found.';
+      }
+
+      return treeString;
+    }
+
+    internalMcpFunctions.__internal_only_getComponentTree =
+      __internal_only_getComponentTree;
   }
 
   return {
@@ -5900,5 +5983,6 @@ export function attach(
     storeAsGlobal,
     updateComponentFilters,
     getEnvironmentNames,
+    ...internalMcpFunctions,
   };
 }
