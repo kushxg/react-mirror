@@ -13,6 +13,7 @@ import {SettingsContext} from './SettingsContext';
 import {StoreContext} from '../context';
 import {CHANGE_LOG_URL} from 'react-devtools-shared/src/devtools/constants';
 import {isInternalFacebookBuild} from 'react-devtools-feature-flags';
+import CodeEditorOptions from './CodeEditorOptions';
 
 import styles from './SettingsShared.css';
 
@@ -46,17 +47,16 @@ export default function GeneralSettings(_: {}): React.Node {
     backendVersion && backendVersion !== frontendVersion;
 
   return (
-    <div className={styles.Settings}>
+    <div className={styles.SettingList}>
       {isInternalFacebookBuild && (
-        <div className={styles.Setting}>
+        <div className={styles.SettingWrapper}>
           This is an internal build of React DevTools for Meta
         </div>
       )}
 
-      <div className={styles.Setting}>
+      <div className={styles.SettingWrapper}>
         <div className={styles.RadioLabel}>Theme</div>
         <select
-          className={styles.Select}
           value={theme}
           onChange={({currentTarget}) => setTheme(currentTarget.value)}>
           <option value="auto">Auto</option>
@@ -65,10 +65,9 @@ export default function GeneralSettings(_: {}): React.Node {
         </select>
       </div>
 
-      <div className={styles.Setting}>
+      <div className={styles.SettingWrapper}>
         <div className={styles.RadioLabel}>Display density</div>
         <select
-          className={styles.Select}
           value={displayDensity}
           onChange={({currentTarget}) =>
             setDisplayDensity(currentTarget.value)
@@ -78,17 +77,25 @@ export default function GeneralSettings(_: {}): React.Node {
         </select>
       </div>
 
+      <div className={styles.SettingWrapper}>
+        <label className={styles.SettingRow}>
+          <div className={styles.RadioLabel}>Open in Editor URL</div>
+          <CodeEditorOptions />
+        </label>
+      </div>
+
       {supportsTraceUpdates && (
-        <div className={styles.Setting}>
-          <label>
+        <div className={styles.SettingWrapper}>
+          <label className={styles.SettingRow}>
             <input
               type="checkbox"
               checked={traceUpdatesEnabled}
               onChange={({currentTarget}) =>
                 setTraceUpdatesEnabled(currentTarget.checked)
               }
-            />{' '}
-            Highlight updates when components render.
+              className={styles.SettingRowCheckbox}
+            />
+            Highlight updates when components render
           </label>
         </div>
       )}
