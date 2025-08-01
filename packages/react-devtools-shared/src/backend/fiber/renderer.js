@@ -50,6 +50,7 @@ import {
   gt,
   gte,
   parseSourceFromComponentStack,
+  parseSourceFromOwnerStack,
   serializeToString,
 } from 'react-devtools-shared/src/backend/utils';
 import {
@@ -2812,7 +2813,19 @@ export function attach(
         pushOperation(convertedTreeBaseDuration);
       }
 
-      if (prevFiber == null || didFiberRender(prevFiber, fiber)) {
+      // Prevent false positive render detection when identical Fiber objects
+      // are nested under HostComponents (like div) that get filtered out by DevTools.
+      // This addresses cases where a parent HostComponent re-renders but its child
+      // components (like function components) remain referentially identical and
+      // should not be reported as having re-rendered in profiler data collection.
+      if (
+        prevFiber == null || 
+        (!(
+          prevFiber === fiber &&
+          fiber.return != null &&
+          (fiber.return.tag === HostComponent || fiber.return.tag === HostSingleton)
+        ) && didFiberRender(prevFiber, fiber))
+      ) {
         if (actualDuration != null) {
           // The actual duration reported by React includes time spent working on children.
           // This is useful information, but it's also useful to be able to exclude child durations.
@@ -3311,11 +3324,25 @@ export function attach(
           elementType === ElementTypeMemo ||
           elementType === ElementTypeForwardRef
         ) {
-          // Otherwise if this is a traced ancestor, flag for the nearest host descendant(s).
-          traceNearestHostComponentUpdate = didFiberRender(
-            prevFiber,
-            nextFiber,
-          );
+          // Prevent false positive render highlighting when identical Fiber objects
+          // are nested under HostComponents that get filtered out by DevTools.
+          // When a HostComponent (like div) re-renders but its child components
+          // remain referentially identical (prevFiber === nextFiber), those children
+          // should not be highlighted as having re-rendered since they were effectively
+          // skipped during React's reconciliation process.
+          if (
+            prevFiber === nextFiber &&
+            nextFiber.return != null &&
+            (nextFiber.return.tag === HostComponent || nextFiber.return.tag === HostSingleton)
+          ) {
+            traceNearestHostComponentUpdate = false; // No actual render for this component
+          } else {
+            // Otherwise if this is a traced ancestor, flag for the nearest host descendant(s).
+            traceNearestHostComponentUpdate = didFiberRender(
+              prevFiber,
+              nextFiber,
+            );
+          }
         }
       }
     }
@@ -3329,6 +3356,15 @@ export function attach(
       if (
         mostRecentlyInspectedElement !== null &&
         mostRecentlyInspectedElement.id === fiberInstance.id &&
+        // Prevent unnecessary inspector cache invalidation when identical Fiber objects
+        // are nested under HostComponents that get filtered out by DevTools.
+        // When a component hasn't actually re-rendered (same Fiber reference under a HostComponent),
+        // we should preserve the cached inspection data to avoid unnecessary re-computation.
+        !(
+          prevFiber === nextFiber &&
+          nextFiber.return != null &&
+          (nextFiber.return.tag === HostComponent || nextFiber.return.tag === HostSingleton)
+        ) &&
         didFiberRender(prevFiber, nextFiber)
       ) {
         // If this Fiber has updated, clear cached inspected data.
@@ -5805,15 +5841,13 @@ export function attach(
   function getSourceForFiberInstance(
     fiberInstance: FiberInstance,
   ): Source | null {
-    const unresolvedSource = fiberInstance.source;
-    if (
-      unresolvedSource !== null &&
-      typeof unresolvedSource === 'object' &&
-      !isError(unresolvedSource)
-    ) {
-      // $FlowFixMe: isError should have refined it.
-      return unresolvedSource;
+    // Favor the owner source if we have one.
+    const ownerSource = getSourceForInstance(fiberInstance);
+    if (ownerSource !== null) {
+      return ownerSource;
     }
+
+    // Otherwise fallback to the throwing trick.
     const dispatcherRef = getDispatcherRef(renderer);
     const stackFrame =
       dispatcherRef == null
@@ -5824,10 +5858,7 @@ export function attach(
             dispatcherRef,
           );
     if (stackFrame === null) {
-      // If we don't find a source location by throwing, try to get one
-      // from an owned child if possible. This is the same branch as
-      // for virtual instances.
-      return getSourceForInstance(fiberInstance);
+      return null;
     }
     const source = parseSourceFromComponentStack(stackFrame);
     fiberInstance.source = source;
@@ -5842,13 +5873,23 @@ export function attach(
       return null;
     }
 
+    if (instance.kind === VIRTUAL_INSTANCE) {
+      // We might have found one on the virtual instance.
+      const debugLocation = instance.data.debugLocation;
+      if (debugLocation != null) {
+        unresolvedSource = debugLocation;
+      }
+    }
+
     // If we have the debug stack (the creation stack of the JSX) for any owned child of this
     // component, then at the bottom of that stack will be a stack frame that is somewhere within
     // the component's function body. Typically it would be the callsite of the JSX unless there's
     // any intermediate utility functions. This won't point to the top of the component function
     // but it's at least somewhere within it.
     if (isError(unresolvedSource)) {
-      unresolvedSource = formatOwnerStack((unresolvedSource: any));
+      return (instance.source = parseSourceFromOwnerStack(
+        (unresolvedSource: any),
+      ));
     }
     if (typeof unresolvedSource === 'string') {
       const idx = unresolvedSource.lastIndexOf('\n');
@@ -5859,6 +5900,86 @@ export function attach(
 
     // $FlowFixMe: refined.
     return unresolvedSource;
+  }
+
+  type InternalMcpFunctions = {
+    __internal_only_getComponentTree?: Function,
+  };
+
+  const internalMcpFunctions: InternalMcpFunctions = {};
+  if (__IS_INTERNAL_MCP_BUILD__) {
+    // eslint-disable-next-line no-inner-declarations
+    function __internal_only_getComponentTree(): string {
+      let treeString = '';
+
+      function buildTreeString(
+        instance: DevToolsInstance,
+        prefix: string = '',
+        isLastChild: boolean = true,
+      ): void {
+        if (!instance) return;
+
+        const name =
+          (instance.kind !== VIRTUAL_INSTANCE
+            ? getDisplayNameForFiber(instance.data)
+            : instance.data.name) || 'Unknown';
+
+        const id = instance.id !== undefined ? instance.id : 'unknown';
+
+        if (name !== 'createRoot()') {
+          treeString +=
+            prefix +
+            (isLastChild ? '└── ' : '├── ') +
+            name +
+            ' (id: ' +
+            id +
+            ')\n';
+        }
+
+        const childPrefix = prefix + (isLastChild ? '    ' : '│   ');
+
+        let childCount = 0;
+        let tempChild = instance.firstChild;
+        while (tempChild !== null) {
+          childCount++;
+          tempChild = tempChild.nextSibling;
+        }
+
+        let child = instance.firstChild;
+        let currentChildIndex = 0;
+
+        while (child !== null) {
+          currentChildIndex++;
+          const isLastSibling = currentChildIndex === childCount;
+          buildTreeString(child, childPrefix, isLastSibling);
+          child = child.nextSibling;
+        }
+      }
+
+      const rootInstances: Array<DevToolsInstance> = [];
+      idToDevToolsInstanceMap.forEach(instance => {
+        if (instance.parent === null || instance.parent.parent === null) {
+          rootInstances.push(instance);
+        }
+      });
+
+      if (rootInstances.length > 0) {
+        for (let i = 0; i < rootInstances.length; i++) {
+          const isLast = i === rootInstances.length - 1;
+          buildTreeString(rootInstances[i], '', isLast);
+          if (!isLast) {
+            treeString += '\n';
+          }
+        }
+      } else {
+        treeString = 'No component tree found.';
+      }
+
+      return treeString;
+    }
+
+    internalMcpFunctions.__internal_only_getComponentTree =
+      __internal_only_getComponentTree;
   }
 
   return {
@@ -5900,5 +6021,6 @@ export function attach(
     storeAsGlobal,
     updateComponentFilters,
     getEnvironmentNames,
+    ...internalMcpFunctions,
   };
 }
