@@ -58,6 +58,12 @@ export function getThenableStateAfterSuspending(): ThenableState {
   return state;
 }
 
+export function getTrackedThenablesAfterRendering(): null | Array<
+  Thenable<any>,
+> {
+  return thenableState;
+}
+
 export const HooksDispatcher: Dispatcher = {
   readContext: (unsupportedContext: any),
 
@@ -95,6 +101,7 @@ export const HooksDispatcher: Dispatcher = {
   useCacheRefresh(): <T>(?() => T, ?T) => void {
     return unsupportedRefresh;
   },
+  useSetStateWithCallback: unsupportedSetStateWithCallback,
 };
 if (enableUseEffectEventHook) {
   HooksDispatcher.useEffectEvent = (unsupportedHook: any);
@@ -114,19 +121,17 @@ function unsupportedContext(): void {
   throw new Error('Cannot read a Client Context from a Server Component.');
 }
 
+function unsupportedSetStateWithCallback() {
+  throw new Error('useSetStateWithCallback is not supported in Server Components.');
+}
+
 function useId(): string {
   if (currentRequest === null) {
     throw new Error('useId can only be used while React is rendering');
   }
   const id = currentRequest.identifierCount++;
   // use 'S' for Flight components to distinguish from 'R' and 'r' in Fizz/Client
-  return (
-    '\u00AB' +
-    currentRequest.identifierPrefix +
-    'S' +
-    id.toString(32) +
-    '\u00BB'
-  );
+  return '_' + currentRequest.identifierPrefix + 'S_' + id.toString(32) + '_';
 }
 
 function use<T>(usable: Usable<T>): T {

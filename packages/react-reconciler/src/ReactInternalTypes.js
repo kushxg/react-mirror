@@ -62,7 +62,8 @@ export type HookType =
   | 'useCacheRefresh'
   | 'useOptimistic'
   | 'useFormState'
-  | 'useActionState';
+  | 'useActionState'
+  | 'useSetStateWithCallback';
 
 export type ContextDependency<T> = {
   context: ReactContext<T>,
@@ -248,6 +249,7 @@ type BaseFiberRootProperties = {
   pingedLanes: Lanes,
   warmLanes: Lanes,
   expiredLanes: Lanes,
+  indicatorLanes: Lanes, // enableDefaultTransitionIndicator only
   errorRecoveryDisabledLanes: Lanes,
   shellSuspendCounter: number,
 
@@ -280,7 +282,9 @@ type BaseFiberRootProperties = {
     errorInfo: {+componentStack?: ?string},
   ) => void,
 
+  // enableDefaultTransitionIndicator only
   onDefaultTransitionIndicator: () => void | (() => void),
+  pendingIndicator: null | (() => void),
 
   formState: ReactFormState<any, any> | null,
 
@@ -452,10 +456,12 @@ export type Dispatcher = {
     initialState: Awaited<S>,
     permalink?: string,
   ) => [Awaited<S>, (P) => void, boolean],
+  useSetStateWithCallback: <T>(initialValue: T) => [T, (value: T, callback?: () => void) => void],
 };
 
 export type AsyncDispatcher = {
   getCacheForType: <T>(resourceType: () => T) => T,
+  cacheSignal: () => null | AbortSignal,
   // DEV-only
   getOwner: () => null | Fiber | ReactComponentInfo | ComponentStackNode,
 };

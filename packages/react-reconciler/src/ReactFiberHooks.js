@@ -55,7 +55,6 @@ import {
   ConcurrentMode,
   StrictEffectsMode,
   StrictLegacyMode,
-  NoStrictPassiveEffectsMode,
 } from './ReactTypeOfMode';
 import {
   NoLane,
@@ -2672,8 +2671,7 @@ function mountEffect(
 ): void {
   if (
     __DEV__ &&
-    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode &&
-    (currentlyRenderingFiber.mode & NoStrictPassiveEffectsMode) === NoMode
+    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode
   ) {
     mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
@@ -3446,7 +3444,7 @@ function mountId(): string {
     const treeId = getTreeId();
 
     // Use a captial R prefix for server-generated ids.
-    id = '\u00AB' + identifierPrefix + 'R' + treeId;
+    id = '_' + identifierPrefix + 'R_' + treeId;
 
     // Unless this is the first id at this level, append a number at the end
     // that represents the position of this useId hook among all the useId
@@ -3456,16 +3454,11 @@ function mountId(): string {
       id += 'H' + localId.toString(32);
     }
 
-    id += '\u00BB';
+    id += '_';
   } else {
     // Use a lowercase r prefix for client-generated ids.
     const globalClientId = globalClientIdCounter++;
-    id =
-      '\u00AB' +
-      identifierPrefix +
-      'r' +
-      globalClientId.toString(32) +
-      '\u00BB';
+    id = '_' + identifierPrefix + 'r_' + globalClientId.toString(32) + '_';
   }
 
   hook.memoizedState = id;
@@ -3904,6 +3897,7 @@ const HooksDispatcherOnMount: Dispatcher = {
   useOptimistic: mountOptimistic,
   useMemoCache,
   useCacheRefresh: mountRefresh,
+  useSetStateWithCallback: mountSetStateWithCallback,
 };
 if (enableUseEffectEventHook) {
   (HooksDispatcherOnMount: Dispatcher).useEffectEvent = mountEvent;
@@ -3934,6 +3928,7 @@ const HooksDispatcherOnUpdate: Dispatcher = {
   useOptimistic: updateOptimistic,
   useMemoCache,
   useCacheRefresh: updateRefresh,
+  useSetStateWithCallback: updateSetStateWithCallback,
 };
 if (enableUseEffectEventHook) {
   (HooksDispatcherOnUpdate: Dispatcher).useEffectEvent = updateEvent;
@@ -3964,6 +3959,7 @@ const HooksDispatcherOnRerender: Dispatcher = {
   useOptimistic: rerenderOptimistic,
   useMemoCache,
   useCacheRefresh: updateRefresh,
+  useSetStateWithCallback: rerenderSetStateWithCallback,
 };
 if (enableUseEffectEventHook) {
   (HooksDispatcherOnRerender: Dispatcher).useEffectEvent = updateEvent;
@@ -4157,6 +4153,7 @@ if (__DEV__) {
       mountHookTypesDev();
       return mountRefresh();
     },
+    useSetStateWithCallback: mountSetStateWithCallback,
   };
   if (enableUseEffectEventHook) {
     (HooksDispatcherOnMountInDEV: Dispatcher).useEffectEvent =
@@ -4324,6 +4321,7 @@ if (__DEV__) {
       updateHookTypesDev();
       return mountRefresh();
     },
+    useSetStateWithCallback: mountSetStateWithCallback,
   };
   if (enableUseEffectEventHook) {
     (HooksDispatcherOnMountWithHookTypesInDEV: Dispatcher).useEffectEvent =
@@ -4491,6 +4489,7 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateRefresh();
     },
+    useSetStateWithCallback: updateSetStateWithCallback,
   };
   if (enableUseEffectEventHook) {
     (HooksDispatcherOnUpdateInDEV: Dispatcher).useEffectEvent =
@@ -4588,7 +4587,7 @@ if (__DEV__) {
       currentHookNameInDev = 'useState';
       updateHookTypesDev();
       const prevDispatcher = ReactSharedInternals.H;
-      ReactSharedInternals.H = InvalidNestedHooksDispatcherOnRerenderInDEV;
+      ReactSharedInternals.H = InvalidNestedHooksDispatcherOnUpdateInDEV;
       try {
         return rerenderState(initialState);
       } finally {
@@ -4658,6 +4657,7 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateRefresh();
     },
+    useSetStateWithCallback: rerenderSetStateWithCallback,
   };
   if (enableUseEffectEventHook) {
     (HooksDispatcherOnRerenderInDEV: Dispatcher).useEffectEvent =
@@ -4849,6 +4849,7 @@ if (__DEV__) {
       mountHookTypesDev();
       return mountRefresh();
     },
+    useSetStateWithCallback: mountSetStateWithCallback,
   };
   if (enableUseEffectEventHook) {
     (InvalidNestedHooksDispatcherOnMountInDEV: Dispatcher).useEffectEvent =
@@ -5041,6 +5042,7 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateRefresh();
     },
+    useSetStateWithCallback: updateSetStateWithCallback,
   };
   if (enableUseEffectEventHook) {
     (InvalidNestedHooksDispatcherOnUpdateInDEV: Dispatcher).useEffectEvent =
@@ -5233,6 +5235,7 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateRefresh();
     },
+    useSetStateWithCallback: rerenderSetStateWithCallback,
   };
   if (enableUseEffectEventHook) {
     (InvalidNestedHooksDispatcherOnRerenderInDEV: Dispatcher).useEffectEvent =
@@ -5245,4 +5248,58 @@ if (__DEV__) {
         return updateEvent(callback);
       };
   }
+}
+
+function mountSetStateWithCallback<T>(initialValue: T): [T, (value: T, callback?: () => void) => void] {
+  const [state, setState] = mountState(initialValue);
+  const callbackRef = mountRef(null);
+  mountEffect(() => {
+    if (callbackRef.current) {
+      callbackRef.current();
+      callbackRef.current = null;
+    }
+  }, [state]);
+  const setStateWithCallback = (value, callback) => {
+    if (callback) {
+      callbackRef.current = callback;
+    }
+    setState(value);
+  };
+  return [state, setStateWithCallback];
+}
+
+function updateSetStateWithCallback<T>(initialValue: T): [T, (value: T, callback?: () => void) => void] {
+  const [state, setState] = updateState(initialValue);
+  const callbackRef = updateRef(null);
+  updateEffect(() => {
+    if (callbackRef.current) {
+      callbackRef.current();
+      callbackRef.current = null;
+    }
+  }, [state]);
+  const setStateWithCallback = (value, callback) => {
+    if (callback) {
+      callbackRef.current = callback;
+    }
+    setState(value);
+  };
+  return [state, setStateWithCallback];
+}
+
+function rerenderSetStateWithCallback<T>(initialValue: T): [T, (value: T, callback?: () => void) => void] {
+  const [state, setState] = rerenderState(initialValue);
+  const callbackRef = updateRef(null);
+  updateEffect(() => {
+    if (callbackRef.current) {
+      callbackRef.current();
+      callbackRef.current = null;
+    }
+  }, [state]);
+  const setStateWithCallback = (value, callback) => {
+    if (callback) {
+      callbackRef.current = callback;
+    }
+    setState(value);
+  };
+  return [state, setStateWithCallback];
 }
