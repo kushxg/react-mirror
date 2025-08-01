@@ -51,7 +51,6 @@
     "abortcontroller-polyfill": "^1.7.5",
     "art": "0.10.1",
     "babel-plugin-syntax-trailing-function-commas": "^6.5.0",
-    "chalk": "^3.0.0",
     "cli-table": "^0.3.1",
     "coffee-script": "^1.12.7",
     "confusing-browser-globals": "^1.0.9",
@@ -91,7 +90,6 @@
     "ncp": "^2.0.0",
     "prettier": "^3.3.3",
     "prettier-2": "npm:prettier@^2",
-    "prettier-plugin-hermes-parser": "^0.23.0",
     "pretty-format": "^29.4.1",
     "prop-types": "^15.6.2",
     "random-seed": "^0.3.0",
@@ -130,7 +128,6 @@
     "lint-build": "node ./scripts/rollup/validate/index.js",
     "extract-errors": "node scripts/error-codes/extract-errors.js",
     "postinstall": "node ./scripts/flow/createFlowConfigs.js",
-    "pretest": "./scripts/react-compiler/build-compiler.sh && ./scripts/react-compiler/link-compiler.sh",
     "test": "node ./scripts/jest/jest-cli.js",
     "test-stable": "node ./scripts/jest/jest-cli.js --release-channel=stable",
     "test-www": "node ./scripts/jest/jest-cli.js --release-channel=www-modern",
@@ -155,5 +152,8 @@
     "react-is": "npm:react-is",
     "jsdom": "22.1.0"
   },
-  "packageManager": "yarn@1.22.22"
+  "packageManager": "yarn@1.22.22",
+  "dependencies": {
+    "chalk": "4.1.2"
+  }
 }
