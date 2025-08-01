@@ -55,7 +55,6 @@ import {
   ConcurrentMode,
   StrictEffectsMode,
   StrictLegacyMode,
-  NoStrictPassiveEffectsMode,
 } from './ReactTypeOfMode';
 import {
   NoLane,
@@ -140,6 +139,7 @@ import {now} from './Scheduler';
 import {
   trackUsedThenable,
   checkIfUseWrappedInTryCatch,
+  checkIfUseWasUsedBefore,
   createThenableState,
   SuspenseException,
   SuspenseActionException,
@@ -647,6 +647,7 @@ function finishRenderingHooks<Props, SecondArg>(
     } else {
       workInProgress.dependencies._debugThenableState = thenableState;
     }
+    checkIfUseWasUsedBefore(workInProgress, thenableState);
   }
 
   // We can assume the previous dispatcher is always this one, since we set it
@@ -1096,7 +1097,12 @@ function useThenable<T>(thenable: Thenable<T>): T {
   if (thenableState === null) {
     thenableState = createThenableState();
   }
-  const result = trackUsedThenable(thenableState, thenable, index);
+  const result = trackUsedThenable(
+    thenableState,
+    thenable,
+    index,
+    __DEV__ ? currentlyRenderingFiber : null,
+  );
 
   // When something suspends with `use`, we replay the component with the
   // "re-render" dispatcher instead of the "mount" or "update" dispatcher.
@@ -2672,8 +2678,7 @@ function mountEffect(
 ): void {
   if (
     __DEV__ &&
-    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode &&
-    (currentlyRenderingFiber.mode & NoStrictPassiveEffectsMode) === NoMode
+    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode
   ) {
     mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
@@ -3446,7 +3451,7 @@ function mountId(): string {
     const treeId = getTreeId();
 
     // Use a captial R prefix for server-generated ids.
-    id = '\u00AB' + identifierPrefix + 'R' + treeId;
+    id = '_' + identifierPrefix + 'R_' + treeId;
 
     // Unless this is the first id at this level, append a number at the end
     // that represents the position of this useId hook among all the useId
@@ -3456,16 +3461,11 @@ function mountId(): string {
       id += 'H' + localId.toString(32);
     }
 
-    id += '\u00BB';
+    id += '_';
   } else {
     // Use a lowercase r prefix for client-generated ids.
     const globalClientId = globalClientIdCounter++;
-    id =
-      '\u00AB' +
-      identifierPrefix +
-      'r' +
-      globalClientId.toString(32) +
-      '\u00BB';
+    id = '_' + identifierPrefix + 'r_' + globalClientId.toString(32) + '_';
   }
 
   hook.memoizedState = id;
