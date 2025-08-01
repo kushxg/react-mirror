@@ -14,6 +14,7 @@ import {
   Identifier,
   IdentifierId,
   Instruction,
+  InstructionKind,
   makePropertyLiteral,
   makeType,
   PropType,
@@ -90,7 +91,8 @@ function apply(func: HIRFunction, unifier: Unifier): void {
       }
     }
   }
-  func.returnType = unifier.get(func.returnType);
+  const returns = func.returns.identifier;
+  returns.type = unifier.get(returns.type);
 }
 
 type TypeEquation = {
@@ -143,12 +145,12 @@ function* generate(
     }
   }
   if (returnTypes.length > 1) {
-    yield equation(func.returnType, {
+    yield equation(func.returns.identifier.type, {
       kind: 'Phi',
       operands: returnTypes,
     });
   } else if (returnTypes.length === 1) {
-    yield equation(func.returnType, returnTypes[0]!);
+    yield equation(func.returns.identifier.type, returnTypes[0]!);
   }
 }
 
@@ -193,10 +195,27 @@ function* generateInstructionTypes(
       break;
     }
 
-    // We intentionally do not infer types for context variables
+    // We intentionally do not infer types for most context variables
     case 'DeclareContext':
-    case 'StoreContext':
     case 'LoadContext': {
+      break;
+    }
+    case 'StoreContext': {
+      /**
+       * The caveat is StoreContext const, where we know the value is
+       * assigned once such that everywhere the value is accessed, it
+       * must have the same type from the rvalue.
+       *
+       * A concrete example where this is useful is `const ref = useRef()`
+       * where the ref is referenced before its declaration in a function
+       * expression, causing it to be converted to a const context variable.
+       */
+      if (value.lvalue.kind === InstructionKind.Const) {
+        yield equation(
+          value.lvalue.place.identifier.type,
+          value.value.identifier.type,
+        );
+      }
       break;
     }
 
@@ -359,6 +378,12 @@ function* generateInstructionTypes(
                 value: makePropertyLiteral(propertyName),
               },
             });
+          } else if (item.kind === 'Spread') {
+            // Array pattern spread always creates an array
+            yield equation(item.place.identifier.type, {
+              kind: 'Object',
+              shapeId: BuiltInArrayId,
+            });
           } else {
             break;
           }
@@ -407,7 +432,7 @@ function* generateInstructionTypes(
       yield equation(left, {
         kind: 'Function',
         shapeId: BuiltInFunctionId,
-        return: value.loweredFunc.func.returnType,
+        return: value.loweredFunc.func.returns.identifier.type,
         isConstructor: false,
       });
       break;
