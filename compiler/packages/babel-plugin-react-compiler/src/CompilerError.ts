@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import * as t from '@babel/types';
+import {codeFrameColumns} from '@babel/code-frame';
 import type {SourceLocation} from './HIR';
 import {Err, Ok, Result} from './Utils/Result';
 import {assertExhaustive} from './Utils/utils';
@@ -15,6 +17,11 @@ export enum ErrorSeverity {
    * misunderstanding on the user’s part.
    */
   InvalidJS = 'InvalidJS',
+  /**
+   * JS syntax that is not supported and which we do not plan to support. Developers should
+   * rewrite to use supported forms.
+   */
+  UnsupportedJS = 'UnsupportedJS',
   /**
    * Code that breaks the rules of React.
    */
@@ -29,6 +36,14 @@ export enum ErrorSeverity {
    */
   CannotPreserveMemoization = 'CannotPreserveMemoization',
   /**
+   * An API that is known to be incompatible with the compiler. Generally as a result of
+   * the library using "interior mutability", ie having a value whose referential identity
+   * stays the same but which provides access to values that can change. For example a
+   * function that doesn't change but returns different results, or an object that doesn't
+   * change identity but whose properties change.
+   */
+  KnownIncompatible = 'KnownIncompatible',
+  /**
    * Unhandled syntax that we don't support yet.
    */
   Todo = 'Todo',
@@ -38,6 +53,24 @@ export enum ErrorSeverity {
    */
   Invariant = 'Invariant',
 }
+
+export type CompilerDiagnosticOptions = {
+  severity: ErrorSeverity;
+  category: string;
+  description: string;
+  details: Array<CompilerDiagnosticDetail>;
+  suggestions?: Array<CompilerSuggestion> | null | undefined;
+};
+
+export type CompilerDiagnosticDetail =
+  /**
+   * A/the source of the error
+   */
+  {
+    kind: 'error';
+    loc: SourceLocation | null;
+    message: string;
+  };
 
 export enum CompilerSuggestionOperation {
   InsertBefore,
@@ -69,6 +102,103 @@ export type CompilerErrorDetailOptions = {
   suggestions?: Array<CompilerSuggestion> | null | undefined;
 };
 
+export type PrintErrorMessageOptions = {
+  /**
+   * ESLint uses 1-indexed columns and prints one error at a time
+   * So it doesn't require the "Found # error(s)" text
+   */
+  eslint: boolean;
+};
+
+export class CompilerDiagnostic {
+  options: CompilerDiagnosticOptions;
+
+  constructor(options: CompilerDiagnosticOptions) {
+    this.options = options;
+  }
+
+  static create(
+    options: Omit<CompilerDiagnosticOptions, 'details'>,
+  ): CompilerDiagnostic {
+    return new CompilerDiagnostic({...options, details: []});
+  }
+
+  get category(): CompilerDiagnosticOptions['category'] {
+    return this.options.category;
+  }
+  get description(): CompilerDiagnosticOptions['description'] {
+    return this.options.description;
+  }
+  get severity(): CompilerDiagnosticOptions['severity'] {
+    return this.options.severity;
+  }
+  get suggestions(): CompilerDiagnosticOptions['suggestions'] {
+    return this.options.suggestions;
+  }
+
+  withDetail(detail: CompilerDiagnosticDetail): CompilerDiagnostic {
+    this.options.details.push(detail);
+    return this;
+  }
+
+  primaryLocation(): SourceLocation | null {
+    return this.options.details.filter(d => d.kind === 'error')[0]?.loc ?? null;
+  }
+
+  printErrorMessage(source: string, options: PrintErrorMessageOptions): string {
+    const buffer = [
+      printErrorSummary(this.severity, this.category),
+      '\n\n',
+      this.description,
+    ];
+    for (const detail of this.options.details) {
+      switch (detail.kind) {
+        case 'error': {
+          const loc = detail.loc;
+          if (loc == null || typeof loc === 'symbol') {
+            continue;
+          }
+          let codeFrame: string;
+          try {
+            codeFrame = printCodeFrame(source, loc, detail.message);
+          } catch (e) {
+            codeFrame = detail.message;
+          }
+          buffer.push('\n\n');
+          if (loc.filename != null) {
+            const line = loc.start.line;
+            const column = options.eslint
+              ? loc.start.column + 1
+              : loc.start.column;
+            buffer.push(`${loc.filename}:${line}:${column}\n`);
+          }
+          buffer.push(codeFrame);
+          break;
+        }
+        default: {
+          assertExhaustive(
+            detail.kind,
+            `Unexpected detail kind ${(detail as any).kind}`,
+          );
+        }
+      }
+    }
+    return buffer.join('');
+  }
+
+  toString(): string {
+    const buffer = [printErrorSummary(this.severity, this.category)];
+    if (this.description != null) {
+      buffer.push(`. ${this.description}.`);
+    }
+    const loc = this.primaryLocation();
+    if (loc != null && typeof loc !== 'symbol') {
+      buffer.push(` (${loc.start.line}:${loc.start.column})`);
+    }
+    return buffer.join('');
+  }
+}
+
 /*
  * Each bailout or invariant in HIR lowering creates an {@link CompilerErrorDetail}, which is then
  * aggregated into a single {@link CompilerError} later.
@@ -96,24 +226,51 @@ export class CompilerErrorDetail {
     return this.options.suggestions;
   }
 
-  printErrorMessage(): string {
-    const buffer = [`${this.severity}: ${this.reason}`];
+  primaryLocation(): SourceLocation | null {
+    return this.loc;
+  }
+
+  printErrorMessage(source: string, options: PrintErrorMessageOptions): string {
+    const buffer = [printErrorSummary(this.severity, this.reason)];
     if (this.description != null) {
-      buffer.push(`. ${this.description}`);
+      buffer.push(`\n\n${this.description}.`);
     }
-    if (this.loc != null && typeof this.loc !== 'symbol') {
-      buffer.push(` (${this.loc.start.line}:${this.loc.end.line})`);
+    const loc = this.loc;
+    if (loc != null && typeof loc !== 'symbol') {
+      let codeFrame: string;
+      try {
+        codeFrame = printCodeFrame(source, loc, this.reason);
+      } catch (e) {
+        codeFrame = '';
+      }
+      buffer.push(`\n\n`);
+      if (loc.filename != null) {
+        const line = loc.start.line;
+        const column = options.eslint ? loc.start.column + 1 : loc.start.column;
+        buffer.push(`${loc.filename}:${line}:${column}\n`);
+      }
+      buffer.push(codeFrame);
+      buffer.push('\n\n');
     }
     return buffer.join('');
   }
 
   toString(): string {
-    return this.printErrorMessage();
+    const buffer = [printErrorSummary(this.severity, this.reason)];
+    if (this.description != null) {
+      buffer.push(`. ${this.description}.`);
+    }
+    const loc = this.loc;
+    if (loc != null && typeof loc !== 'symbol') {
+      buffer.push(` (${loc.start.line}:${loc.start.column})`);
+    }
+    return buffer.join('');
   }
 }
 
 export class CompilerError extends Error {
-  details: Array<CompilerErrorDetail> = [];
+  details: Array<CompilerErrorDetail | CompilerDiagnostic> = [];
+  printedMessage: string | null = null;
 
   static invariant(
     condition: unknown,
@@ -129,6 +286,12 @@ export class CompilerError extends Error {
       );
       throw errors;
     }
+  }
+
+  static throwDiagnostic(options: CompilerDiagnosticOptions): never {
+    const errors = new CompilerError();
+    errors.pushDiagnostic(new CompilerDiagnostic(options));
+    throw errors;
   }
 
   static throwTodo(
@@ -193,16 +356,47 @@ export class CompilerError extends Error {
   }
 
   override get message(): string {
-    return this.toString();
+    return this.printedMessage ?? this.toString();
   }
 
   override set message(_message: string) {}
 
   override toString(): string {
+    if (this.printedMessage) {
+      return this.printedMessage;
+    }
     if (Array.isArray(this.details)) {
       return this.details.map(detail => detail.toString()).join('\n\n');
     }
     return this.name;
+  }
+
+  withPrintedMessage(
+    source: string,
+    options: PrintErrorMessageOptions,
+  ): CompilerError {
+    this.printedMessage = this.printErrorMessage(source, options);
+    return this;
+  }
+
+  printErrorMessage(source: string, options: PrintErrorMessageOptions): string {
+    if (options.eslint && this.details.length === 1) {
+      return this.details[0].printErrorMessage(source, options);
+    }
+    return (
+      `Found ${this.details.length} error${this.details.length === 1 ? '' : 's'}:\n\n` +
+      this.details
+        .map(detail => detail.printErrorMessage(source, options).trim())
+        .join('\n\n')
+    );
+  }
+
+  merge(other: CompilerError): void {
+    this.details.push(...other.details);
+  }
+
+  pushDiagnostic(diagnostic: CompilerDiagnostic): void {
+    this.details.push(diagnostic);
   }
 
   push(options: CompilerErrorDetailOptions): CompilerErrorDetail {
@@ -241,13 +435,71 @@ export class CompilerError extends Error {
         case ErrorSeverity.InvalidJS:
         case ErrorSeverity.InvalidReact:
         case ErrorSeverity.InvalidConfig:
+        case ErrorSeverity.UnsupportedJS:
+        case ErrorSeverity.KnownIncompatible: {
           return true;
+        }
         case ErrorSeverity.CannotPreserveMemoization:
-        case ErrorSeverity.Todo:
+        case ErrorSeverity.Todo: {
           return false;
-        default:
+        }
+        default: {
           assertExhaustive(detail.severity, 'Unhandled error severity');
+        }
       }
     });
   }
+}
+
+function printCodeFrame(
+  source: string,
+  loc: t.SourceLocation,
+  message: string,
+): string {
+  return codeFrameColumns(
+    source,
+    {
+      start: {
+        line: loc.start.line,
+        column: loc.start.column + 1,
+      },
+      end: {
+        line: loc.end.line,
+        column: loc.end.column + 1,
+      },
+    },
+    {
+      message,
+    },
+  );
+}
+
+function printErrorSummary(severity: ErrorSeverity, message: string): string {
+  let severityCategory: string;
+  switch (severity) {
+    case ErrorSeverity.InvalidConfig:
+    case ErrorSeverity.InvalidJS:
+    case ErrorSeverity.InvalidReact:
+    case ErrorSeverity.UnsupportedJS: {
+      severityCategory = 'Error';
+      break;
+    }
+    case ErrorSeverity.KnownIncompatible:
+    case ErrorSeverity.CannotPreserveMemoization: {
+      severityCategory = 'Compilation Skipped';
+      break;
+    }
+    case ErrorSeverity.Invariant: {
+      severityCategory = 'Invariant';
+      break;
+    }
+    case ErrorSeverity.Todo: {
+      severityCategory = 'Todo';
+      break;
+    }
+    default: {
+      assertExhaustive(severity, `Unexpected severity '${severity}'`);
+    }
+  }
+  return `${severityCategory}: ${message}`;
 }
