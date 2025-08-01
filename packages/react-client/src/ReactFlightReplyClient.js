@@ -18,13 +18,10 @@ import type {
 import type {LazyComponent} from 'react/src/ReactLazy';
 import type {TemporaryReferenceSet} from './ReactFlightTemporaryReferences';
 
-import {enableRenderableContext} from 'shared/ReactFeatureFlags';
-
 import {
   REACT_ELEMENT_TYPE,
   REACT_LAZY_TYPE,
   REACT_CONTEXT_TYPE,
-  REACT_PROVIDER_TYPE,
   getIteratorFn,
   ASYNC_ITERATOR,
 } from 'shared/ReactSymbols';
@@ -42,7 +39,7 @@ import getPrototypeOf from 'shared/getPrototypeOf';
 
 const ObjectPrototype = Object.prototype;
 
-import {usedWithSSR} from './ReactFlightClientConfig';
+import {getSourceURL, usedWithSSR} from './ReactFlightClientConfig';
 
 type ReactJSONValue =
   | string
@@ -699,10 +696,7 @@ export function processReply(
         return serializeTemporaryReferenceMarker();
       }
       if (__DEV__) {
-        if (
-          (value: any).$$typeof ===
-          (enableRenderableContext ? REACT_CONTEXT_TYPE : REACT_PROVIDER_TYPE)
-        ) {
+        if ((value: any).$$typeof === REACT_CONTEXT_TYPE) {
           console.error(
             'React Context Providers cannot be passed to Server Functions from the Client.%s',
             describeObjectForErrorMessage(parent, key),
@@ -1092,14 +1086,6 @@ function createFakeServerFunction<A: Iterable<any>, T>(
       '})';
   }
 
-  if (filename.startsWith('/')) {
-    // If the filename starts with `/` we assume that it is a file system file
-    // rather than relative to the current host. Since on the server fully qualified
-    // stack traces use the file path.
-    // TODO: What does this look like on Windows?
-    filename = 'file://' + filename;
-  }
-
   if (sourceMap) {
     // We use the prefix rsc://React/ to separate these from other files listed in
     // the Chrome DevTools. We need a "host name" and not just a protocol because
@@ -1112,12 +1098,12 @@ function createFakeServerFunction<A: Iterable<any>, T>(
       '\n//# sourceURL=rsc://React/' +
       encodeURIComponent(environmentName) +
       '/' +
-      filename +
+      encodeURI(filename) +
       '?s' + // We add an extra s here to distinguish from the fake stack frames
       fakeServerFunctionIdx++;
     code += '\n//# sourceMappingURL=' + sourceMap;
   } else if (filename) {
-    code += '\n//# sourceURL=' + filename;
+    code += '\n//# sourceURL=' + getSourceURL(filename);
   }
 
   try {
