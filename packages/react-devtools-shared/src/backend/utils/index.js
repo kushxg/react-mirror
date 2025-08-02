@@ -12,11 +12,13 @@ import {compareVersions} from 'compare-versions';
 import {dehydrate} from 'react-devtools-shared/src/hydration';
 import isArray from 'shared/isArray';
 
-import type {Source} from 'react-devtools-shared/src/shared/types';
+import type {ReactFunctionLocation} from 'shared/ReactTypes';
 import type {DehydratedData} from 'react-devtools-shared/src/frontend/types';
 
 export {default as formatWithStyles} from './formatWithStyles';
 export {default as formatConsoleArguments} from './formatConsoleArguments';
+
+import {formatOwnerStackString} from '../shared/DevToolsOwnerStack';
 
 // TODO: update this to the first React version that has a corresponding DevTools backend
 const FIRST_DEVTOOLS_BACKEND_LOCKSTEP_VER = '999.9.9';
@@ -256,9 +258,12 @@ export const isReactNativeEnvironment = (): boolean => {
   return window.document == null;
 };
 
-function extractLocation(
-  url: string,
-): null | {sourceURL: string, line?: string, column?: string} {
+function extractLocation(url: string): null | {
+  functionName?: string,
+  sourceURL: string,
+  line?: string,
+  column?: string,
+} {
   if (url.indexOf(':') === -1) {
     return null;
   }
@@ -273,12 +278,15 @@ function extractLocation(
     return null;
   }
 
+  const functionName = ''; // TODO: Parse this in the regexp.
   const [, , sourceURL, line, column] = locationParts;
-  return {sourceURL, line, column};
+  return {functionName, sourceURL, line, column};
 }
 
 const CHROME_STACK_REGEXP = /^\s*at .*(\S+:\d+|\(native\))/m;
-function parseSourceFromChromeStack(stack: string): Source | null {
+function parseSourceFromChromeStack(
+  stack: string,
+): ReactFunctionLocation | null {
   const frames = stack.split('\n');
   // eslint-disable-next-line no-for-of-loops/no-for-of-loops
   for (const frame of frames) {
@@ -295,19 +303,22 @@ function parseSourceFromChromeStack(stack: string): Source | null {
       continue;
     }
 
-    const {sourceURL, line = '1', column = '1'} = location;
+    const {functionName, sourceURL, line = '1', column = '1'} = location;
 
-    return {
+    return [
+      functionName || '',
       sourceURL,
-      line: parseInt(line, 10),
-      column: parseInt(column, 10),
-    };
+      parseInt(line, 10),
+      parseInt(column, 10),
+    ];
   }
 
   return null;
 }
 
-function parseSourceFromFirefoxStack(stack: string): Source | null {
+function parseSourceFromFirefoxStack(
+  stack: string,
+): ReactFunctionLocation | null {
   const frames = stack.split('\n');
   // eslint-disable-next-line no-for-of-loops/no-for-of-loops
   for (const frame of frames) {
@@ -323,13 +334,14 @@ function parseSourceFromFirefoxStack(stack: string): Source | null {
       continue;
     }
 
-    const {sourceURL, line = '1', column = '1'} = location;
+    const {functionName, sourceURL, line = '1', column = '1'} = location;
 
-    return {
+    return [
+      functionName || '',
       sourceURL,
-      line: parseInt(line, 10),
-      column: parseInt(column, 10),
-    };
+      parseInt(line, 10),
+      parseInt(column, 10),
+    ];
   }
 
   return null;
@@ -337,12 +349,93 @@ function parseSourceFromFirefoxStack(stack: string): Source | null {
 
 export function parseSourceFromComponentStack(
   componentStack: string,
-): Source | null {
+): ReactFunctionLocation | null {
   if (componentStack.match(CHROME_STACK_REGEXP)) {
     return parseSourceFromChromeStack(componentStack);
   }
 
   return parseSourceFromFirefoxStack(componentStack);
+}
+
+let collectedLocation: ReactFunctionLocation | null = null;
+
+function collectStackTrace(
+  error: Error,
+  structuredStackTrace: CallSite[],
+): string {
+  let result: null | ReactFunctionLocation = null;
+  // Collect structured stack traces from the callsites.
+  // We mirror how V8 serializes stack frames and how we later parse them.
+  for (let i = 0; i < structuredStackTrace.length; i++) {
+    const callSite = structuredStackTrace[i];
+    const name = callSite.getFunctionName();
+    if (
+      name != null &&
+      (name.includes('react_stack_bottom_frame') ||
+        name.includes('react-stack-bottom-frame'))
+    ) {
+      // We pick the last frame that matches before the bottom frame since
+      // that will be immediately inside the component as opposed to some helper.
+      // If we don't find a bottom frame then we bail to string parsing.
+      collectedLocation = result;
+      // Skip everything after the bottom frame since it'll be internals.
+      break;
+    } else {
+      const sourceURL = callSite.getScriptNameOrSourceURL();
+      const line =
+        // $FlowFixMe[prop-missing]
+        typeof callSite.getEnclosingLineNumber === 'function'
+          ? (callSite: any).getEnclosingLineNumber()
+          : callSite.getLineNumber();
+      const col =
+        // $FlowFixMe[prop-missing]
+        typeof callSite.getEnclosingColumnNumber === 'function'
+          ? (callSite: any).getEnclosingColumnNumber()
+          : callSite.getColumnNumber();
+      if (!sourceURL || !line || !col) {
+        // Skip eval etc. without source url. They don't have location.
+        continue;
+      }
+      result = [name, sourceURL, line, col];
+    }
+  }
+  // At the same time we generate a string stack trace just in case someone
+  // else reads it.
+  const name = error.name || 'Error';
+  const message = error.message || '';
+  let stack = name + ': ' + message;
+  for (let i = 0; i < structuredStackTrace.length; i++) {
+    stack += '\n    at ' + structuredStackTrace[i].toString();
+  }
+  return stack;
+}
+
+export function parseSourceFromOwnerStack(
+  error: Error,
+): ReactFunctionLocation | null {
+  // First attempt to collected the structured data using prepareStackTrace.
+  collectedLocation = null;
+  const previousPrepare = Error.prepareStackTrace;
+  Error.prepareStackTrace = collectStackTrace;
+  let stack;
+  try {
+    stack = error.stack;
+  } catch (e) {
+    // $FlowFixMe[incompatible-type] It does accept undefined.
+    Error.prepareStackTrace = undefined;
+    stack = error.stack;
+  } finally {
+    Error.prepareStackTrace = previousPrepare;
+  }
+  if (collectedLocation !== null) {
+    return collectedLocation;
+  }
+  if (stack == null) {
+    return null;
+  }
+  // Fallback to parsing the string form.
+  const componentStack = formatOwnerStackString(stack);
+  return parseSourceFromComponentStack(componentStack);
 }
 
 // 0.123456789 => 0.123
