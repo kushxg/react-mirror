@@ -12,7 +12,6 @@ import type {
   TouchedViewDataAtPoint,
   ViewConfig,
 } from './ReactNativeTypes';
-import {create, diff} from './ReactNativeAttributePayloadFabric';
 import {dispatchEvent} from './ReactFabricEventEmitter';
 import {
   NoEventPriority,
@@ -25,6 +24,7 @@ import {
 import type {Fiber} from 'react-reconciler/src/ReactInternalTypes';
 import {HostText} from 'react-reconciler/src/ReactWorkTags';
 import {
+  getFragmentParentHostFiber,
   getInstanceFromHostFiber,
   traverseFragmentInstance,
 } from 'react-reconciler/src/ReactFiberTreeReflection';
@@ -35,6 +35,8 @@ import {
   deepFreezeAndThrowOnMutationInDev,
   createPublicInstance,
   createPublicTextInstance,
+  createAttributePayload,
+  diffAttributePayloads,
   type PublicInstance as ReactNativePublicInstance,
   type PublicTextInstance,
   type PublicRootInstance,
@@ -58,6 +60,10 @@ const {
 } = nativeFabricUIManager;
 
 import {getClosestInstanceFromNode} from './ReactFabricComponentTree';
+import {
+  compareDocumentPositionForEmptyFragment,
+  compareDocumentPositionForFragment,
+} from 'shared/ReactDOMFragmentRefShared';
 
 import {
   getInspectorDataForViewTag,
@@ -65,10 +71,7 @@ import {
   getInspectorDataForInstance,
 } from './ReactNativeFiberInspector';
 
-import {
-  passChildrenWhenCloningPersistedNodes,
-  enableLazyPublicInstanceInFabric,
-} from 'shared/ReactFeatureFlags';
+import {passChildrenWhenCloningPersistedNodes} from 'shared/ReactFeatureFlags';
 import {REACT_CONTEXT_TYPE} from 'shared/ReactSymbols';
 import type {ReactContext} from 'shared/ReactTypes';
 
@@ -89,7 +92,7 @@ const {get: getViewConfigForType} = ReactNativeViewConfigRegistry;
 let nextReactTag = 2;
 
 type InternalInstanceHandle = Object;
-type Node = Object;
+
 export type Type = string;
 export type Props = Object;
 export type Instance = {
@@ -190,7 +193,10 @@ export function createInstance(
     }
   }
 
-  const updatePayload = create(props, viewConfig.validAttributes);
+  const updatePayload = createAttributePayload(
+    props,
+    viewConfig.validAttributes,
+  );
 
   const node = createNode(
     tag, // reactTag
@@ -200,37 +206,17 @@ export function createInstance(
     internalInstanceHandle, // internalInstanceHandle
   );
 
-  if (enableLazyPublicInstanceInFabric) {
-    return {
-      node: node,
-      canonical: {
-        nativeTag: tag,
-        viewConfig,
-        currentProps: props,
-        internalInstanceHandle,
-        publicInstance: null,
-        publicRootInstance: rootContainerInstance.publicInstance,
-      },
-    };
-  } else {
-    const component = createPublicInstance(
-      tag,
+  return {
+    node: node,
+    canonical: {
+      nativeTag: tag,
       viewConfig,
+      currentProps: props,
       internalInstanceHandle,
-      rootContainerInstance.publicInstance,
-    );
-
-    return {
-      node: node,
-      canonical: {
-        nativeTag: tag,
-        viewConfig,
-        currentProps: props,
-        internalInstanceHandle,
-        publicInstance: component,
-      },
-    };
-  }
+      publicInstance: null,
+      publicRootInstance: rootContainerInstance.publicInstance,
+    },
+  };
 }
 
 export function createTextInstance(
@@ -363,6 +349,15 @@ export function getPublicInstanceFromInternalInstanceHandle(
   return getPublicInstance(elementInstance);
 }
 
+function getPublicInstanceFromHostFiber(fiber: Fiber): PublicInstance {
+  const instance = getInstanceFromHostFiber<Instance>(fiber);
+  const publicInstance = getPublicInstance(instance);
+  if (publicInstance == null) {
+    throw new Error('Expected to find a host node. This is a bug in React.');
+  }
+  return publicInstance;
+}
+
 export function prepareForCommit(containerInfo: Container): null | Object {
   // Noop
   return null;
@@ -456,7 +451,11 @@ export function cloneInstance(
   newChildSet: ?ChildSet,
 ): Instance {
   const viewConfig = instance.canonical.viewConfig;
-  const updatePayload = diff(oldProps, newProps, viewConfig.validAttributes);
+  const updatePayload = diffAttributePayloads(
+    oldProps,
+    newProps,
+    viewConfig.validAttributes,
+  );
   // TODO: If the event handlers have changed, we need to update the current props
   // in the commit phase but there is no host config hook to do it yet.
   // So instead we hack it by updating it in the render phase.
@@ -505,7 +504,7 @@ export function cloneHiddenInstance(
 ): Instance {
   const viewConfig = instance.canonical.viewConfig;
   const node = instance.node;
-  const updatePayload = create(
+  const updatePayload = createAttributePayload(
     {style: {display: 'none'}},
     viewConfig.validAttributes,
   );
@@ -625,6 +624,7 @@ export type FragmentInstanceType = {
   _observers: null | Set<IntersectionObserver>,
   observeUsing: (observer: IntersectionObserver) => void,
   unobserveUsing: (observer: IntersectionObserver) => void,
+  compareDocumentPosition: (otherNode: PublicInstance) => number,
 };
 
 function FragmentInstance(this: FragmentInstanceType, fragmentFiber: Fiber) {
@@ -644,12 +644,8 @@ FragmentInstance.prototype.observeUsing = function (
   traverseFragmentInstance(this._fragmentFiber, observeChild, observer);
 };
 function observeChild(child: Fiber, observer: IntersectionObserver) {
-  const instance = getInstanceFromHostFiber<Instance>(child);
-  const publicInstance = getPublicInstance(instance);
-  if (publicInstance == null) {
-    throw new Error('Expected to find a host node. This is a bug in React.');
-  }
-  // $FlowFixMe[incompatible-call] Element types are behind a flag in RN
+  const publicInstance = getPublicInstanceFromHostFiber(child);
+  // $FlowFixMe[incompatible-call] DOM types expect Element
   observer.observe(publicInstance);
   return false;
 }
@@ -671,13 +667,48 @@ FragmentInstance.prototype.unobserveUsing = function (
   }
 };
 function unobserveChild(child: Fiber, observer: IntersectionObserver) {
-  const instance = getInstanceFromHostFiber<Instance>(child);
-  const publicInstance = getPublicInstance(instance);
-  if (publicInstance == null) {
-    throw new Error('Expected to find a host node. This is a bug in React.');
-  }
-  // $FlowFixMe[incompatible-call] Element types are behind a flag in RN
+  const publicInstance = getPublicInstanceFromHostFiber(child);
+  // $FlowFixMe[incompatible-call] DOM types expect Element
   observer.unobserve(publicInstance);
+  return false;
+}
+
+// $FlowFixMe[prop-missing]
+FragmentInstance.prototype.compareDocumentPosition = function (
+  this: FragmentInstanceType,
+  otherNode: PublicInstance,
+): number {
+  const parentHostFiber = getFragmentParentHostFiber(this._fragmentFiber);
+  if (parentHostFiber === null) {
+    return Node.DOCUMENT_POSITION_DISCONNECTED;
+  }
+  const parentHostInstance = getPublicInstanceFromHostFiber(parentHostFiber);
+  const children: Array<Fiber> = [];
+  traverseFragmentInstance(this._fragmentFiber, collectChildren, children);
+  if (children.length === 0) {
+    return compareDocumentPositionForEmptyFragment(
+      this._fragmentFiber,
+      parentHostInstance,
+      otherNode,
+      getPublicInstanceFromHostFiber,
+    );
+  }
+
+  const firstInstance = getPublicInstanceFromHostFiber(children[0]);
+  const lastInstance = getPublicInstanceFromHostFiber(
+    children[children.length - 1],
+  );
+
+  return compareDocumentPositionForFragment(
+    parentHostInstance,
+    firstInstance,
+    lastInstance,
+    otherNode,
+  );
+};
+
+function collectChildren(child: Fiber, collection: Array<Fiber>): boolean {
+  collection.push(child);
   return false;
 }
 
@@ -695,12 +726,17 @@ export function updateFragmentInstanceFiber(
 }
 
 export function commitNewChildToFragmentInstance(
-  child: Fiber,
+  childInstance: Instance,
   fragmentInstance: FragmentInstanceType,
 ): void {
+  const publicInstance = getPublicInstance(childInstance);
   if (fragmentInstance._observers !== null) {
+    if (publicInstance == null) {
+      throw new Error('Expected to find a host node. This is a bug in React.');
+    }
     fragmentInstance._observers.forEach(observer => {
-      observeChild(child, observer);
+      // $FlowFixMe[incompatible-call] Element types are behind a flag in RN
+      observer.observe(publicInstance);
     });
   }
 }
