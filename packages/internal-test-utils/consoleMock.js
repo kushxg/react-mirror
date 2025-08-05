@@ -119,18 +119,24 @@ export function assertConsoleLogsCleared() {
     }
 
     if (warnings.length > 0) {
+      const stringifiedWarnings = warnings.map(log => {
+        return util.format(...normalizeComponentStack(log));
+      });
       message += `\nconsole.warn was called without assertConsoleWarnDev:\n${diff(
         '',
-        warnings.map(normalizeComponentStack).join('\n'),
+        stringifiedWarnings.join('\n'),
         {
           omitAnnotationLines: true,
         },
       )}\n`;
     }
     if (errors.length > 0) {
+      const stringifiedErrors = errors.map(log => {
+        return util.format(...normalizeComponentStack(log));
+      });
       message += `\nconsole.error was called without assertConsoleErrorDev:\n${diff(
         '',
-        errors.map(normalizeComponentStack).join('\n'),
+        stringifiedErrors.join('\n'),
         {
           omitAnnotationLines: true,
         },
@@ -156,7 +162,8 @@ function normalizeCodeLocInfo(str) {
   //  at Component (/path/filename.js:123:45)
   // React format:
   //    in Component (at filename.js:123)
-  return str.replace(/\n +(?:at|in) ([\S]+)[^\n]*/g, function (m, name) {
+  return str.replace(/\n +(?:at|in) ([^(\[\n]+)[^\n]*/g, function (m, name) {
+    name = name.trim();
     if (name.endsWith('.render')) {
       // Class components will have the `render` method as part of their stack trace.
       // We strip that out in our normalization to make it look more like component stacks.
