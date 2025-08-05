@@ -9,8 +9,8 @@
 
 const chalk = require('chalk');
 const util = require('util');
-const shouldIgnoreConsoleError = require('./shouldIgnoreConsoleError');
-const shouldIgnoreConsoleWarn = require('./shouldIgnoreConsoleWarn');
+const defaultShouldIgnoreConsoleError = require('./shouldIgnoreConsoleError');
+const defaultShouldIgnoreConsoleWarn = require('./shouldIgnoreConsoleWarn');
 import {diff} from 'jest-diff';
 import {printReceived} from 'jest-matcher-utils';
 
@@ -20,7 +20,13 @@ const loggedErrors = (global.__loggedErrors = global.__loggedErrors || []);
 const loggedWarns = (global.__loggedWarns = global.__loggedWarns || []);
 const loggedLogs = (global.__loggedLogs = global.__loggedLogs || []);
 
-const patchConsoleMethod = (methodName, logged) => {
+const patchConsoleMethod = (
+  methodName,
+  logged,
+  shouldIgnoreConsoleError,
+  shouldIgnoreConsoleWarn,
+  appendOwnerStack,
+) => {
   const newMethod = function (format, ...args) {
     // Ignore uncaught errors reported by jsdom
     // and React addendums because they're too noisy.
@@ -35,6 +41,7 @@ const patchConsoleMethod = (methodName, logged) => {
 
     // Append Component Stacks. Simulates a framework or DevTools appending them.
     if (
+      appendOwnerStack &&
       typeof format === 'string' &&
       (methodName === 'error' || methodName === 'warn')
     ) {
@@ -61,14 +68,37 @@ const patchConsoleMethod = (methodName, logged) => {
 };
 
 let logMethod;
-export function patchConsoleMethods({includeLog} = {includeLog: false}) {
-  patchConsoleMethod('error', loggedErrors);
-  patchConsoleMethod('warn', loggedWarns);
+export function patchConsoleMethods({
+  appendOwnerStack = false,
+  includeLog = false,
+  shouldIgnoreConsoleError = defaultShouldIgnoreConsoleError,
+  shouldIgnoreConsoleWarn = defaultShouldIgnoreConsoleWarn,
+} = {}) {
+  patchConsoleMethod(
+    'error',
+    loggedErrors,
+    shouldIgnoreConsoleError,
+    shouldIgnoreConsoleWarn,
+    appendOwnerStack,
+  );
+  patchConsoleMethod(
+    'warn',
+    loggedWarns,
+    shouldIgnoreConsoleError,
+    shouldIgnoreConsoleWarn,
+    appendOwnerStack,
+  );
 
   // Only assert console.log isn't called in CI so you can debug tests in DEV.
   // The matchers will still work in DEV, so you can assert locally.
   if (includeLog) {
-    logMethod = patchConsoleMethod('log', loggedLogs);
+    logMethod = patchConsoleMethod(
+      'log',
+      loggedLogs,
+      shouldIgnoreConsoleError,
+      shouldIgnoreConsoleWarn,
+      appendOwnerStack,
+    );
   }
 }
 
@@ -107,11 +137,12 @@ export function assertConsoleLogsCleared() {
     let message = `${chalk.dim('asserConsoleLogsCleared')}(${chalk.red(
       'expected',
     )})\n`;
+    const stringifiedLogs = logs.map(log => util.format(...log));
 
     if (logs.length > 0) {
       message += `\nconsole.log was called without assertConsoleLogDev:\n${diff(
         '',
-        logs.join('\n'),
+        stringifiedLogs.join('\n'),
         {
           omitAnnotationLines: true,
         },
@@ -119,25 +150,32 @@ export function assertConsoleLogsCleared() {
     }
 
     if (warnings.length > 0) {
+      const stringifiedWarnings = warnings.map(log =>
+        util.format(...normalizeComponentStack(log)),
+      );
+      // We normalize the component stack to make it easier to read.
       message += `\nconsole.warn was called without assertConsoleWarnDev:\n${diff(
         '',
-        warnings.map(normalizeComponentStack).join('\n'),
+        stringifiedWarnings.join('\n'),
         {
           omitAnnotationLines: true,
         },
       )}\n`;
     }
     if (errors.length > 0) {
+      const stringifiedErrors = errors.map(log =>
+        util.format(...normalizeComponentStack(log)),
+      );
       message += `\nconsole.error was called without assertConsoleErrorDev:\n${diff(
         '',
-        errors.map(normalizeComponentStack).join('\n'),
+        stringifiedErrors.join('\n'),
         {
           omitAnnotationLines: true,
         },
       )}\n`;
     }
 
-    message += `\nYou must call one of the assertConsoleDev helpers between each act call.`;
+    message += `\nYou must call one of the console assertion helpers between each act call.`;
 
     const error = Error(message);
     Error.captureStackTrace(error, assertConsoleLogsCleared);
@@ -156,7 +194,8 @@ function normalizeCodeLocInfo(str) {
   //  at Component (/path/filename.js:123:45)
   // React format:
   //    in Component (at filename.js:123)
-  return str.replace(/\n +(?:at|in) ([\S]+)[^\n]*/g, function (m, name) {
+  return str.replace(/\n +(?:at|in) ([^(\[\n]+)[^\n]*/g, function (m, name) {
+    name = name.trim();
     if (name.endsWith('.render')) {
       // Class components will have the `render` method as part of their stack trace.
       // We strip that out in our normalization to make it look more like component stacks.
@@ -190,6 +229,7 @@ export function createLogAssertion(
   consoleMethod,
   matcherName,
   clearObservedErrors,
+  enabled,
 ) {
   function logName() {
     switch (consoleMethod) {
@@ -203,7 +243,7 @@ export function createLogAssertion(
   }
 
   return function assertConsoleLog(expectedMessages, options = {}) {
-    if (__DEV__) {
+    if (enabled) {
       // eslint-disable-next-line no-inner-declarations
       function throwFormattedError(message) {
         const error = new Error(
@@ -271,7 +311,7 @@ export function createLogAssertion(
 
         // Ignore uncaught errors reported by jsdom
         // and React addendums because they're too noisy.
-        if (shouldIgnoreConsoleError(format, args)) {
+        if (defaultShouldIgnoreConsoleError(format, args)) {
           return;
         }
 
@@ -354,7 +394,7 @@ export function createLogAssertion(
         let argIndex = 0;
         // console.* could have been called with a non-string e.g. `console.error(new Error())`
         // eslint-disable-next-line react-internal/safe-string-coercion
-        String(format).replace(/%s|%c/g, () => argIndex++);
+        String(format).replace(/%s|%c|%o/g, () => argIndex++);
         if (argIndex !== args.length) {
           if (format.includes('%c%s')) {
             // We intentionally use mismatching formatting when printing badging because we don't know
@@ -473,7 +513,7 @@ export function createLogAssertion(
               item =>
                 `Received ${item.args.length} arguments for a message with ${
                   item.expectedArgCount
-                } placeholders:\n  ${printReceived(item.format)}`,
+                } placeholders:\n  message: ${printReceived(item.format)}\n  placeholders: ${printReceived(item.args)}`,
             )
             .join('\n\n'),
         );

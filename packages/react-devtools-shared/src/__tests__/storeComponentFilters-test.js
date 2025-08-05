@@ -22,6 +22,8 @@ describe('Store component filters', () => {
   let store: Store;
   let utils;
   let actAsync;
+  let assertConsoleError;
+  let assertConsoleWarn;
 
   beforeEach(() => {
     bridge = global.bridge;
@@ -33,6 +35,8 @@ describe('Store component filters', () => {
     React = require('react');
     Types = require('react-devtools-shared/src/frontend/types');
     utils = require('./utils');
+    assertConsoleError = utils.assertConsoleError;
+    assertConsoleWarn = utils.assertConsoleWarn;
 
     actAsync = utils.actAsync;
   });
@@ -207,12 +211,11 @@ describe('Store component filters', () => {
       );
 
       expect(store).toMatchInlineSnapshot(`
-      [root]
-        ▾ <Activity>
-            <div>
-        ▾ <Activity>
-            <div>
-    `);
+        [root]
+          ▾ <Activity>
+              <div>
+            <Activity>
+      `);
 
       await actAsync(
         async () =>
@@ -222,10 +225,9 @@ describe('Store component filters', () => {
       );
 
       expect(store).toMatchInlineSnapshot(`
-      [root]
-          <div>
-          <div>
-    `);
+        [root]
+            <div>
+      `);
 
       await actAsync(
         async () =>
@@ -235,12 +237,11 @@ describe('Store component filters', () => {
       );
 
       expect(store).toMatchInlineSnapshot(`
-      [root]
-        ▾ <Activity>
-            <div>
-        ▾ <Activity>
-            <div>
-    `);
+        [root]
+          ▾ <Activity>
+              <div>
+            <Activity>
+      `);
     }
   });
 
@@ -262,12 +263,12 @@ describe('Store component filters', () => {
       );
 
       expect(store).toMatchInlineSnapshot(`
-      [root]
-        ▾ <ViewTransition>
-            <div>
-        ▾ <ViewTransition>
-            <div>
-    `);
+              [root]
+                ▾ <ViewTransition>
+                    <div>
+                ▾ <ViewTransition>
+                    <div>
+          `);
 
       await actAsync(
         async () =>
@@ -277,12 +278,12 @@ describe('Store component filters', () => {
       );
 
       expect(store).toMatchInlineSnapshot(`
-      [root]
-        ▾ <ViewTransition>
-            <div>
-        ▾ <ViewTransition>
-            <div>
-    `);
+              [root]
+                ▾ <ViewTransition>
+                    <div>
+                ▾ <ViewTransition>
+                    <div>
+          `);
 
       await actAsync(
         async () =>
@@ -292,12 +293,12 @@ describe('Store component filters', () => {
       );
 
       expect(store).toMatchInlineSnapshot(`
-      [root]
-        ▾ <ViewTransition>
-            <div>
-        ▾ <ViewTransition>
-            <div>
-    `);
+              [root]
+                ▾ <ViewTransition>
+                    <div>
+                ▾ <ViewTransition>
+                    <div>
+          `);
     }
   });
 
@@ -509,7 +510,11 @@ describe('Store component filters', () => {
 
     const Component = ({shouldSuspend}) => {
       if (shouldSuspend) {
-        throw promise;
+        if (React.use) {
+          React.use(promise);
+        } else {
+          throw promise;
+        }
       }
       return null;
     };
@@ -575,15 +580,15 @@ describe('Store component filters', () => {
             utils.createDisplayNameFilter('Error'),
           ]),
       );
-      utils.withErrorsOrWarningsIgnored(['test-only:'], () => {
-        legacyRender(
-          <React.Fragment>
-            <ComponentWithError />
-            <ComponentWithWarning />
-            <ComponentWithWarningAndError />
-          </React.Fragment>,
-        );
-      });
+      legacyRender(
+        <React.Fragment>
+          <ComponentWithError />
+          <ComponentWithWarning />
+          <ComponentWithWarningAndError />
+        </React.Fragment>,
+      );
+      assertConsoleError(['test-only: render error']);
+      assertConsoleError(['test-only: render warning']);
 
       expect(store).toMatchInlineSnapshot(``);
       expect(store.componentWithErrorCount).toBe(0);
@@ -663,17 +668,23 @@ describe('Store component filters', () => {
           ]),
       );
 
-      utils.withErrorsOrWarningsIgnored(['test-only:'], () => {
-        utils.act(() => {
-          render(
-            <React.Fragment>
-              <ComponentWithError />
-              <ComponentWithWarning />
-              <ComponentWithWarningAndError />
-            </React.Fragment>,
-          );
-        }, false);
-      });
+      utils.act(() => {
+        render(
+          <React.Fragment>
+            <ComponentWithError />
+            <ComponentWithWarning />
+            <ComponentWithWarningAndError />
+          </React.Fragment>,
+        );
+      }, false);
+      assertConsoleError([
+        'test-only: render error',
+        'test-only: render error',
+      ]);
+      assertConsoleWarn([
+        'test-only: render warning',
+        'test-only: render warning',
+      ]);
 
       expect(store).toMatchInlineSnapshot(``);
       expect(store.componentWithErrorCount).toBe(0);
