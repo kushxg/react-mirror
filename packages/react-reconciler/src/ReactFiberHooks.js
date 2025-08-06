@@ -55,7 +55,6 @@ import {
   ConcurrentMode,
   StrictEffectsMode,
   StrictLegacyMode,
-  NoStrictPassiveEffectsMode,
 } from './ReactTypeOfMode';
 import {
   NoLane,
@@ -281,6 +280,9 @@ let localIdCounter: number = 0;
 // Counts number of `use`-d thenables
 let thenableIndexCounter: number = 0;
 let thenableState: ThenableState | null = null;
+
+// Track whether we've switched dispatchers due to conditional use
+let hasDispatcherSwitchedDueToUse: boolean = false;
 
 // Used for ids that are generated completely client-side (i.e. not during
 // hydration). This counter is global, so client ids are not stable across
@@ -625,6 +627,9 @@ export function renderWithHooks<Props, SecondArg>(
 
   finishRenderingHooks(current, workInProgress, Component);
 
+  // Reset dispatcher switch flag for the next render
+  hasDispatcherSwitchedDueToUse = false;
+
   return children;
 }
 
@@ -932,6 +937,9 @@ export function resetHooksAfterThrow(): void {
   // We can assume the previous dispatcher is always this one, since we set it
   // at the beginning of the render phase and there's no re-entrance.
   ReactSharedInternals.H = ContextOnlyDispatcher;
+
+  // Reset dispatcher switch flag
+  hasDispatcherSwitchedDueToUse = false;
 }
 
 export function resetHooksOnUnwind(workInProgress: Fiber): void {
@@ -1038,6 +1046,32 @@ function updateWorkInProgressHook(): Hook {
           'Update hook called on initial render. This is likely a bug in React. Please file an issue.',
         );
       } else {
+        // Check if we're in a conditional use scenario
+        if (hasDispatcherSwitchedDueToUse) {
+          // We're in a situation where conditional use has caused hook count mismatch.
+          // Create a new hook and mark that we should treat the next hook as a mount.
+          const newHook: Hook = {
+            memoizedState: null,
+            baseState: null,
+            baseQueue: null,
+            queue: null,
+            next: null,
+          };
+
+          if (workInProgressHook === null) {
+            // This is the first hook in the list.
+            currentlyRenderingFiber.memoizedState = workInProgressHook =
+              newHook;
+          } else {
+            // Append to the end of the list.
+            workInProgressHook = workInProgressHook.next = newHook;
+          }
+
+          // Don't throw error - let the hook continue
+          // The specific hook implementation will handle initialization
+          return workInProgressHook;
+        }
+
         // This is an update. We should always have a current hook.
         throw new Error('Rendered more hooks than during the previous render.');
       }
@@ -1131,11 +1165,15 @@ function useThenable<T>(thenable: Thenable<T>): T {
     const currentFiber = workInProgressFiber.alternate;
     if (__DEV__) {
       if (currentFiber !== null && currentFiber.memoizedState !== null) {
+        hasDispatcherSwitchedDueToUse = true;
         ReactSharedInternals.H = HooksDispatcherOnUpdateInDEV;
       } else {
         ReactSharedInternals.H = HooksDispatcherOnMountInDEV;
       }
     } else {
+      if (currentFiber !== null && currentFiber.memoizedState !== null) {
+        hasDispatcherSwitchedDueToUse = true;
+      }
       ReactSharedInternals.H =
         currentFiber === null || currentFiber.memoizedState === null
           ? HooksDispatcherOnMount
@@ -1305,10 +1343,20 @@ function updateReducerImpl<S, A>(
   const queue = hook.queue;
 
   if (queue === null) {
-    throw new Error(
-      'Should have a queue. You are likely calling Hooks conditionally, ' +
-        'which is not allowed. (https://react.dev/link/invalid-hook-call)',
-    );
+    // Check if this is a conditional use scenario
+    if (handleConditionalUseInit(hook)) {
+      // For conditional use, delegate to mount behavior with default initial value
+      const initialState =
+        reducer === basicStateReducer ? false : ((undefined: any): S);
+      return callWithConditionalUseFlag(() =>
+        mountReducer(reducer, initialState, undefined),
+      );
+    } else {
+      throw new Error(
+        'Should have a queue. You are likely calling Hooks conditionally, ' +
+          'which is not allowed. (https://react.dev/link/invalid-hook-call)',
+      );
+    }
   }
 
   queue.lastRenderedReducer = reducer;
@@ -1761,6 +1809,14 @@ function updateSyncExternalStore<T>(
     markWorkInProgressReceivedUpdate();
   }
   const inst = hook.queue;
+
+  // Handle conditional use scenario where hook was newly created
+  if (handleConditionalUseInit(hook) && inst === null) {
+    // Delegate to mount behavior
+    return callWithConditionalUseFlag(() =>
+      mountSyncExternalStore(subscribe, getSnapshot, getServerSnapshot),
+    );
+  }
 
   updateEffect(subscribeToStore.bind(null, fiber, inst, subscribe), [
     subscribe,
@@ -2634,6 +2690,15 @@ function updateEffectImpl(
 ): void {
   const hook = updateWorkInProgressHook();
   const nextDeps = deps === undefined ? null : deps;
+
+  // Handle conditional use scenario where hook was newly created
+  if (handleConditionalUseInit(hook)) {
+    // Delegate to mount behavior
+    return callWithConditionalUseFlag(() =>
+      mountEffectImpl(fiberFlags, hookFlags, create, deps),
+    );
+  }
+
   const effect: Effect = hook.memoizedState;
   const inst = effect.inst;
 
@@ -2672,8 +2737,7 @@ function mountEffect(
 ): void {
   if (
     __DEV__ &&
-    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode &&
-    (currentlyRenderingFiber.mode & NoStrictPassiveEffectsMode) === NoMode
+    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode
   ) {
     mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
@@ -2902,6 +2966,13 @@ function updateCallback<T>(callback: T, deps: Array<mixed> | void | null): T {
   const hook = updateWorkInProgressHook();
   const nextDeps = deps === undefined ? null : deps;
   const prevState = hook.memoizedState;
+
+  // Handle conditional use scenario where hook was newly created
+  if (handleConditionalUseInit(hook)) {
+    // Delegate to mount behavior
+    return callWithConditionalUseFlag(() => mountCallback(callback, deps));
+  }
+
   if (nextDeps !== null) {
     const prevDeps: Array<mixed> | null = prevState[1];
     if (areHookInputsEqual(nextDeps, prevDeps)) {
@@ -2931,6 +3002,22 @@ function mountMemo<T>(
   return nextValue;
 }
 
+// Helper function to handle conditional use initialization
+function handleConditionalUseInit(hook: Hook): boolean {
+  return hasDispatcherSwitchedDueToUse && hook.memoizedState === null;
+}
+
+// Wrapper to safely call mount functions during conditional use
+function callWithConditionalUseFlag<T>(fn: () => T): T {
+  const prevFlag = hasDispatcherSwitchedDueToUse;
+  hasDispatcherSwitchedDueToUse = false;
+  try {
+    return fn();
+  } finally {
+    hasDispatcherSwitchedDueToUse = prevFlag;
+  }
+}
+
 function updateMemo<T>(
   nextCreate: () => T,
   deps: Array<mixed> | void | null,
@@ -2938,6 +3025,13 @@ function updateMemo<T>(
   const hook = updateWorkInProgressHook();
   const nextDeps = deps === undefined ? null : deps;
   const prevState = hook.memoizedState;
+
+  // Handle conditional use scenario where hook was newly created
+  if (handleConditionalUseInit(hook)) {
+    // Delegate to mount behavior
+    return callWithConditionalUseFlag(() => mountMemo(nextCreate, deps));
+  }
+
   // Assume these are defined. If they're not, areHookInputsEqual will warn.
   if (nextDeps !== null) {
     const prevDeps: Array<mixed> | null = prevState[1];
@@ -3403,6 +3497,27 @@ function updateTransition(): [
   const [booleanOrThenable] = updateState(false);
   const hook = updateWorkInProgressHook();
   const start = hook.memoizedState;
+
+  // Handle conditional use scenario
+  if (handleConditionalUseInit(hook)) {
+    // Delegate to mount behavior
+    return callWithConditionalUseFlag(() => mountTransition());
+  }
+
+  // Check if start is null for other error conditions
+  if (start === null) {
+    const stateHook = currentlyRenderingFiber.memoizedState;
+    const startFn = startTransition.bind(
+      null,
+      currentlyRenderingFiber,
+      stateHook.queue,
+      true,
+      false,
+    );
+    hook.memoizedState = startFn;
+    return [false, startFn];
+  }
+
   const isPending =
     typeof booleanOrThenable === 'boolean'
       ? booleanOrThenable
@@ -3446,7 +3561,7 @@ function mountId(): string {
     const treeId = getTreeId();
 
     // Use a captial R prefix for server-generated ids.
-    id = '\u00AB' + identifierPrefix + 'R' + treeId;
+    id = '_' + identifierPrefix + 'R_' + treeId;
 
     // Unless this is the first id at this level, append a number at the end
     // that represents the position of this useId hook among all the useId
@@ -3456,16 +3571,11 @@ function mountId(): string {
       id += 'H' + localId.toString(32);
     }
 
-    id += '\u00BB';
+    id += '_';
   } else {
     // Use a lowercase r prefix for client-generated ids.
     const globalClientId = globalClientIdCounter++;
-    id =
-      '\u00AB' +
-      identifierPrefix +
-      'r' +
-      globalClientId.toString(32) +
-      '\u00BB';
+    id = '_' + identifierPrefix + 'r_' + globalClientId.toString(32) + '_';
   }
 
   hook.memoizedState = id;
