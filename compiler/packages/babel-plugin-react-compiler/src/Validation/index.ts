@@ -6,10 +6,11 @@
  */
 
 export {validateContextVariableLValues} from './ValidateContextVariableLValues';
+export {validateConditionalHooksUsage} from './ValidateConditionalHooksUsage';
 export {validateHooksUsage} from './ValidateHooksUsage';
 export {validateMemoizedEffectDependencies} from './ValidateMemoizedEffectDependencies';
 export {validateNoCapitalizedCalls} from './ValidateNoCapitalizedCalls';
-export {validateNoRefAccessInRender} from './ValidateNoRefAccesInRender';
+export {validateNoRefAccessInRender} from './ValidateNoRefAccessInRender';
 export {validateNoSetStateInRender} from './ValidateNoSetStateInRender';
 export {validatePreservedManualMemoization} from './ValidatePreservedManualMemoization';
 export {validateUseMemo} from './ValidateUseMemo';

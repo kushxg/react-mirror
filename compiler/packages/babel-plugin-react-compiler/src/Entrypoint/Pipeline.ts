@@ -82,6 +82,7 @@ import {
 import {inferTypes} from '../TypeInference';
 import {
   validateContextVariableLValues,
+  validateConditionalHooksUsage,
   validateHooksUsage,
   validateMemoizedEffectDependencies,
   validateNoCapitalizedCalls,
@@ -92,9 +93,8 @@ import {
 } from '../Validation';
 import {validateLocalsNotReassignedAfterRender} from '../Validation/ValidateLocalsNotReassignedAfterRender';
 import {outlineFunctions} from '../Optimization/OutlineFunctions';
-import {propagatePhiTypes} from '../TypeInference/PropagatePhiTypes';
 import {lowerContextAccess} from '../Optimization/LowerContextAccess';
-import {validateNoSetStateInPassiveEffects} from '../Validation/ValidateNoSetStateInPassiveEffects';
+import {validateNoSetStateInEffects} from '../Validation/ValidateNoSetStateInEffects';
 import {validateNoJSXInTryStatement} from '../Validation/ValidateNoJSXInTryStatement';
 import {propagateScopeDependenciesHIR} from '../HIR/PropagateScopeDependenciesHIR';
 import {outlineJSX} from '../Optimization/OutlineJsx';
@@ -104,6 +104,9 @@ import {validateNoImpureFunctionsInRender} from '../Validation/ValidateNoImpureF
 import {CompilerError} from '..';
 import {validateStaticComponents} from '../Validation/ValidateStaticComponents';
 import {validateNoFreezingKnownMutableFunctions} from '../Validation/ValidateNoFreezingKnownMutableFunctions';
+import {inferMutationAliasingEffects} from '../Inference/InferMutationAliasingEffects';
+import {inferMutationAliasingRanges} from '../Inference/InferMutationAliasingRanges';
+import {validateNoDerivedComputationsInEffects} from '../Validation/ValidateNoDerivedComputationsInEffects';
 
 export type CompilerPipelineValue =
   | {kind: 'ast'; name: string; value: CodegenFunction}
@@ -130,6 +133,7 @@ function run(
     mode,
     config,
     contextIdentifiers,
+    func,
     logger,
     filename,
     code,
@@ -171,7 +175,7 @@ function runWithEnvironment(
     !env.config.disableMemoizationForDebugging &&
     !env.config.enableChangeDetectionForDebugging
   ) {
-    dropManualMemoization(hir);
+    dropManualMemoization(hir).unwrap();
     log({kind: 'hir', name: 'DropManualMemoization', value: hir});
   }
 
@@ -205,6 +209,8 @@ function runWithEnvironment(
   if (env.isInferredMemoEnabled) {
     if (env.config.validateHooksUsage) {
       validateHooksUsage(hir).unwrap();
+      // Enhanced validation for conditional hook patterns (PR #34116 fix)
+      validateConditionalHooksUsage(hir).unwrap();
     }
     if (env.config.validateNoCapitalizedCalls) {
       validateNoCapitalizedCalls(hir).unwrap();
@@ -226,15 +232,27 @@ function runWithEnvironment(
   analyseFunctions(hir);
   log({kind: 'hir', name: 'AnalyseFunctions', value: hir});
 
-  const fnEffectErrors = inferReferenceEffects(hir);
-  if (env.isInferredMemoEnabled) {
-    if (fnEffectErrors.length > 0) {
-      CompilerError.throw(fnEffectErrors[0]);
+  if (!env.config.enableNewMutationAliasingModel) {
+    const fnEffectErrors = inferReferenceEffects(hir);
+    if (env.isInferredMemoEnabled) {
+      if (fnEffectErrors.length > 0) {
+        CompilerError.throw(fnEffectErrors[0]);
+      }
+    }
+    log({kind: 'hir', name: 'InferReferenceEffects', value: hir});
+  } else {
+    const mutabilityAliasingErrors = inferMutationAliasingEffects(hir);
+    log({kind: 'hir', name: 'InferMutationAliasingEffects', value: hir});
+    if (env.isInferredMemoEnabled) {
+      if (mutabilityAliasingErrors.isErr()) {
+        throw mutabilityAliasingErrors.unwrapErr();
+      }
     }
   }
-  log({kind: 'hir', name: 'InferReferenceEffects', value: hir});
 
-  validateLocalsNotReassignedAfterRender(hir);
+  if (!env.config.enableNewMutationAliasingModel) {
+    validateLocalsNotReassignedAfterRender(hir);
+  }
 
   // Note: Has to come after infer reference effects because "dead" code may still affect inference
   deadCodeElimination(hir);
@@ -248,8 +266,21 @@ function runWithEnvironment(
   pruneMaybeThrows(hir);
   log({kind: 'hir', name: 'PruneMaybeThrows', value: hir});
 
-  inferMutableRanges(hir);
-  log({kind: 'hir', name: 'InferMutableRanges', value: hir});
+  if (!env.config.enableNewMutationAliasingModel) {
+    inferMutableRanges(hir);
+    log({kind: 'hir', name: 'InferMutableRanges', value: hir});
+  } else {
+    const mutabilityAliasingErrors = inferMutationAliasingRanges(hir, {
+      isFunctionExpression: false,
+    });
+    log({kind: 'hir', name: 'InferMutationAliasingRanges', value: hir});
+    if (env.isInferredMemoEnabled) {
+      if (mutabilityAliasingErrors.isErr()) {
+        throw mutabilityAliasingErrors.unwrapErr();
+      }
+      validateLocalsNotReassignedAfterRender(hir);
+    }
+  }
 
   if (env.isInferredMemoEnabled) {
     if (env.config.assertValidMutableRanges) {
@@ -264,8 +295,12 @@ function runWithEnvironment(
       validateNoSetStateInRender(hir).unwrap();
     }
 
-    if (env.config.validateNoSetStateInPassiveEffects) {
-      env.logErrors(validateNoSetStateInPassiveEffects(hir));
+    if (env.config.validateNoDerivedComputationsInEffects) {
+      validateNoDerivedComputationsInEffects(hir);
+    }
+
+    if (env.config.validateNoSetStateInEffects) {
+      env.logErrors(validateNoSetStateInEffects(hir));
     }
 
     if (env.config.validateNoJSXInTryStatements) {
@@ -276,7 +311,10 @@ function runWithEnvironment(
       validateNoImpureFunctionsInRender(hir).unwrap();
     }
 
-    if (env.config.validateNoFreezingKnownMutableFunctions) {
+    if (
+      env.config.validateNoFreezingKnownMutableFunctions ||
+      env.config.enableNewMutationAliasingModel
+    ) {
       validateNoFreezingKnownMutableFunctions(hir).unwrap();
     }
   }
@@ -288,13 +326,6 @@ function runWithEnvironment(
   log({
     kind: 'hir',
     name: 'RewriteInstructionKindsBasedOnReassignment',
-    value: hir,
-  });
-
-  propagatePhiTypes(hir);
-  log({
-    kind: 'hir',
-    name: 'PropagatePhiTypes',
     value: hir,
   });
 
