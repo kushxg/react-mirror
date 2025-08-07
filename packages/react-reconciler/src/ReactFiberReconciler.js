@@ -57,7 +57,7 @@ import {
   processChildContext,
   emptyContextObject,
   isContextProvider as isLegacyContextProvider,
-} from './ReactFiberContext';
+} from './ReactFiberLegacyContext';
 import {createFiberRoot} from './ReactFiberRoot';
 import {isRootDehydrated} from './ReactFiberShellHydration';
 import {
@@ -125,6 +125,7 @@ export {
   defaultOnRecoverableError,
 } from './ReactFiberErrorLogger';
 import {getLabelForLane, TotalLanes} from 'react-reconciler/src/ReactFiberLane';
+import {registerDefaultIndicator} from './ReactFiberAsyncAction';
 
 type OpaqueRoot = FiberRoot;
 
@@ -259,7 +260,7 @@ export function createContainer(
 ): OpaqueRoot {
   const hydrate = false;
   const initialChildren = null;
-  return createFiberRoot(
+  const root = createFiberRoot(
     containerInfo,
     tag,
     hydrate,
@@ -274,6 +275,8 @@ export function createContainer(
     onDefaultTransitionIndicator,
     transitionCallbacks,
   );
+  registerDefaultIndicator(onDefaultTransitionIndicator);
+  return root;
 }
 
 export function createHydrationContainer(
@@ -323,6 +326,8 @@ export function createHydrationContainer(
     transitionCallbacks,
   );
 
+  registerDefaultIndicator(onDefaultTransitionIndicator);
+
   // TODO: Move this to FiberRoot constructor
   root.context = getContextForSubtree(null);
 
@@ -341,6 +346,7 @@ export function createHydrationContainer(
   update.callback =
     callback !== undefined && callback !== null ? callback : null;
   enqueueUpdate(current, update, lane);
+  startUpdateTimerByLane(lane, 'hydrateRoot()');
   scheduleInitialHydrationOnRoot(root, lane);
 
   return root;
