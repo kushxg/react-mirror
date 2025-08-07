@@ -44,7 +44,7 @@ import {
   getHookKind,
   makeIdentifierName,
 } from '../HIR/HIR';
-import {printIdentifier, printPlace} from '../HIR/PrintHIR';
+import {printIdentifier, printInstruction, printPlace} from '../HIR/PrintHIR';
 import {eachPatternOperand} from '../HIR/visitors';
 import {Err, Ok, Result} from '../Utils/Result';
 import {GuardKind} from '../Utils/RuntimeDiagnosticConstants';
@@ -349,11 +349,9 @@ function codegenReactiveFunction(
   fn: ReactiveFunction,
 ): Result<CodegenFunction, CompilerError> {
   for (const param of fn.params) {
-    if (param.kind === 'Identifier') {
-      cx.temp.set(param.identifier.declarationId, null);
-    } else {
-      cx.temp.set(param.place.identifier.declarationId, null);
-    }
+    const place = param.kind === 'Identifier' ? param : param.place;
+    cx.temp.set(place.identifier.declarationId, null);
+    cx.declare(place.identifier);
   }
 
   const params = fn.params.map(param => convertParameter(param));
@@ -1183,7 +1181,7 @@ function codegenTerminal(
               ? codegenPlaceToExpression(cx, case_.test)
               : null;
           const block = codegenBlock(cx, case_.block!);
-          return t.switchCase(test, [block]);
+          return t.switchCase(test, block.body.length === 0 ? [] : [block]);
         }),
       );
     }
@@ -1310,7 +1308,7 @@ function codegenInstructionNullable(
         });
         CompilerError.invariant(value?.type === 'FunctionExpression', {
           reason: 'Expected a function as a function declaration value',
-          description: null,
+          description: `Got ${value == null ? String(value) : value.type} at ${printInstruction(instr)}`,
           loc: instr.value.loc,
           suggestions: null,
         });
@@ -1726,7 +1724,7 @@ function codegenInstructionValue(
     }
     case 'UnaryExpression': {
       value = t.unaryExpression(
-        instrValue.operator as 'throw', // todo
+        instrValue.operator,
         codegenPlaceToExpression(cx, instrValue.value),
       );
       break;
@@ -1812,41 +1810,70 @@ function codegenInstructionValue(
     case 'MethodCall': {
       const isHook =
         getHookKind(cx.env, instrValue.property.identifier) != null;
-      const memberExpr = codegenPlaceToExpression(cx, instrValue.property);
-      CompilerError.invariant(
-        t.isMemberExpression(memberExpr) ||
-          t.isOptionalMemberExpression(memberExpr),
-        {
-          reason:
-            '[Codegen] Internal error: MethodCall::property must be an unpromoted + unmemoized MemberExpression. ' +
-            `Got a \`${memberExpr.type}\``,
-          description: null,
-          loc: memberExpr.loc ?? null,
-          suggestions: null,
-        },
-      );
-      CompilerError.invariant(
-        t.isNodesEquivalent(
-          memberExpr.object,
-          codegenPlaceToExpression(cx, instrValue.receiver),
-        ),
-        {
-          reason:
-            '[Codegen] Internal error: Forget should always generate MethodCall::property ' +
-            'as a MemberExpression of MethodCall::receiver',
-          description: null,
-          loc: memberExpr.loc ?? null,
-          suggestions: null,
-        },
-      );
-      const args = instrValue.args.map(arg => codegenArgument(cx, arg));
-      value = createCallExpression(
-        cx.env,
-        memberExpr,
-        args,
-        instrValue.loc,
-        isHook,
-      );
+      /**
+       * We need to check if the property was memoized. If it has, we should reconstruct the
+       * MemberExpression.
+       */
+      let memberExpr: t.Expression;
+      const tmp = cx.temp.get(instrValue.property.identifier.declarationId);
+      if (tmp != null && tmp.type === 'Identifier') {
+        /**
+         * We can't reconstruct the MemberExpression from just the identifier, so we work around
+         * this by allowing an Identifier here.
+         */
+        memberExpr = tmp;
+      } else if (tmp != null) {
+        memberExpr = convertValueToExpression(tmp);
+      } else {
+        memberExpr = codegenPlaceToExpression(cx, instrValue.property);
+      }
+
+      // Reconstruct the MemberExpression if we previously saw an Identifier.
+      if (memberExpr.type === 'Identifier') {
+        const args = instrValue.args.map(arg => codegenArgument(cx, arg));
+        value = createCallExpression(
+          cx.env,
+          memberExpr,
+          args,
+          instrValue.loc,
+          isHook,
+        );
+      } else {
+        CompilerError.invariant(
+          t.isMemberExpression(memberExpr) ||
+            t.isOptionalMemberExpression(memberExpr),
+          {
+            reason:
+              '[Codegen] Internal error: MethodCall::property must be an unpromoted + unmemoized MemberExpression. ' +
+              `Got a \`${memberExpr.type}\``,
+            description: null,
+            loc: memberExpr.loc ?? null,
+            suggestions: null,
+          },
+        );
+        CompilerError.invariant(
+          t.isNodesEquivalent(
+            memberExpr.object,
+            codegenPlaceToExpression(cx, instrValue.receiver),
+          ),
+          {
+            reason:
+              '[Codegen] Internal error: Forget should always generate MethodCall::property ' +
+              'as a MemberExpression of MethodCall::receiver',
+            description: null,
+            loc: memberExpr.loc ?? null,
+            suggestions: null,
+          },
+        );
+        const args = instrValue.args.map(arg => codegenArgument(cx, arg));
+        value = createCallExpression(
+          cx.env,
+          memberExpr,
+          args,
+          instrValue.loc,
+          isHook,
+        );
+      }
       break;
     }
     case 'NewExpression': {
@@ -2582,7 +2609,16 @@ function codegenValue(
   value: boolean | number | string | null | undefined,
 ): t.Expression {
   if (typeof value === 'number') {
-    return t.numericLiteral(value);
+    if (value < 0) {
+      /**
+       * Babel's code generator produces invalid JS for negative numbers when
+       * run with { compact: true }.
+       * See repro https://codesandbox.io/p/devbox/5d47fr
+       */
+      return t.unaryExpression('-', t.numericLiteral(-value), false);
+    } else {
+      return t.numericLiteral(value);
+    }
   } else if (typeof value === 'boolean') {
     return t.booleanLiteral(value);
   } else if (typeof value === 'string') {
