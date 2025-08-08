@@ -7,12 +7,8 @@
 
 import {NodePath} from '@babel/core';
 import * as t from '@babel/types';
-import {
-  CompilerError,
-  CompilerErrorDetail,
-  ErrorSeverity,
-} from '../CompilerError';
-import {ReactFunctionType} from '../HIR/Environment';
+import {CompilerError, ErrorSeverity} from '../CompilerError';
+import {ExternalFunction, ReactFunctionType} from '../HIR/Environment';
 import {CodegenFunction} from '../ReactiveScopes';
 import {isComponentDeclaration} from '../Utils/ComponentDeclaration';
 import {isHookDeclaration} from '../Utils/HookDeclaration';
@@ -31,6 +27,8 @@ import {
   suppressionsToCompilerError,
 } from './Suppression';
 import {GeneratedSource} from '../HIR';
+import {Err, Ok, Result} from '../Utils/Result';
+import {ErrorCode} from '../Utils/CompilerErrorCodes';
 
 export type CompilerPass = {
   opts: PluginOptions;
@@ -40,25 +38,95 @@ export type CompilerPass = {
 };
 export const OPT_IN_DIRECTIVES = new Set(['use forget', 'use memo']);
 export const OPT_OUT_DIRECTIVES = new Set(['use no forget', 'use no memo']);
+const DYNAMIC_GATING_DIRECTIVE = new RegExp('^use memo if\\(([^\\)]*)\\)$');
 
-export function findDirectiveEnablingMemoization(
+export function tryFindDirectiveEnablingMemoization(
   directives: Array<t.Directive>,
-): t.Directive | null {
-  return (
-    directives.find(directive =>
-      OPT_IN_DIRECTIVES.has(directive.value.value),
-    ) ?? null
+  opts: PluginOptions,
+): Result<t.Directive | null, CompilerError> {
+  const optIn = directives.find(directive =>
+    OPT_IN_DIRECTIVES.has(directive.value.value),
   );
+  if (optIn != null) {
+    return Ok(optIn);
+  }
+  const dynamicGating = findDirectivesDynamicGating(directives, opts);
+  if (dynamicGating.isOk()) {
+    return Ok(dynamicGating.unwrap()?.directive ?? null);
+  } else {
+    return Err(dynamicGating.unwrapErr());
+  }
 }
 
 export function findDirectiveDisablingMemoization(
   directives: Array<t.Directive>,
+  {customOptOutDirectives}: PluginOptions,
 ): t.Directive | null {
+  if (customOptOutDirectives != null) {
+    return (
+      directives.find(
+        directive =>
+          customOptOutDirectives.indexOf(directive.value.value) !== -1,
+      ) ?? null
+    );
+  }
   return (
     directives.find(directive =>
       OPT_OUT_DIRECTIVES.has(directive.value.value),
     ) ?? null
   );
+}
+function findDirectivesDynamicGating(
+  directives: Array<t.Directive>,
+  opts: PluginOptions,
+): Result<
+  {
+    gating: ExternalFunction;
+    directive: t.Directive;
+  } | null,
+  CompilerError
+> {
+  if (opts.dynamicGating === null) {
+    return Ok(null);
+  }
+  const errors = new CompilerError();
+  const result: Array<{directive: t.Directive; match: string}> = [];
+
+  for (const directive of directives) {
+    const maybeMatch = DYNAMIC_GATING_DIRECTIVE.exec(directive.value.value);
+    if (maybeMatch != null && maybeMatch[1] != null) {
+      if (t.isValidIdentifier(maybeMatch[1])) {
+        result.push({directive, match: maybeMatch[1]});
+      } else {
+        errors.pushErrorCode(ErrorCode.DYNAMIC_GATING_IS_NOT_IDENTIFIER, {
+          description: `Found '${directive.value.value}'`,
+          loc: directive.loc ?? null,
+        });
+      }
+    }
+  }
+  if (errors.hasErrors()) {
+    return Err(errors);
+  } else if (result.length > 1) {
+    const error = new CompilerError();
+    error.pushErrorCode(ErrorCode.DYNAMIC_GATING_MULTIPLE_DIRECTIVES, {
+      description: `Expected a single directive but found [${result
+        .map(r => r.directive.value.value)
+        .join(', ')}]`,
+      loc: result[0].directive.loc ?? null,
+    });
+    return Err(error);
+  } else if (result.length === 1) {
+    return Ok({
+      gating: {
+        source: opts.dynamicGating.source,
+        importSpecifierName: result[0].match,
+      },
+      directive: result[0].directive,
+    });
+  } else {
+    return Ok(null);
+  }
 }
 
 function isCriticalError(err: unknown): boolean {
@@ -104,7 +172,7 @@ function logError(
         context.opts.logger.logEvent(context.filename, {
           kind: 'CompileError',
           fnLoc,
-          detail: detail.options,
+          detail,
         });
       }
     } else {
@@ -326,7 +394,8 @@ export function compileProgram(
     code: pass.code,
     suppressions,
     hasModuleScopeOptOut:
-      findDirectiveDisablingMemoization(program.node.directives) != null,
+      findDirectiveDisablingMemoization(program.node.directives, pass.opts) !=
+      null,
   });
 
   const queue: Array<CompileSource> = findFunctionsToCompile(
@@ -373,14 +442,12 @@ export function compileProgram(
   if (programContext.hasModuleScopeOptOut) {
     if (compiledFns.length > 0) {
       const error = new CompilerError();
-      error.pushErrorDetail(
-        new CompilerErrorDetail({
-          reason:
-            'Unexpected compiled functions when module scope opt-out is present',
-          severity: ErrorSeverity.Invariant,
-          loc: null,
-        }),
-      );
+      error.push({
+        reason:
+          'Unexpected compiled functions when module scope opt-out is present',
+        severity: ErrorSeverity.Invariant,
+        loc: null,
+      });
       handleError(error, programContext, null);
     }
     return null;
@@ -477,22 +544,43 @@ function processFn(
   fnType: ReactFunctionType,
   programContext: ProgramContext,
 ): null | CodegenFunction {
-  let directives;
+  let directives: {
+    optIn: t.Directive | null;
+    optOut: t.Directive | null;
+  };
   if (fn.node.body.type !== 'BlockStatement') {
-    directives = {optIn: null, optOut: null};
-  } else {
     directives = {
-      optIn: findDirectiveEnablingMemoization(fn.node.body.directives),
-      optOut: findDirectiveDisablingMemoization(fn.node.body.directives),
+      optIn: null,
+      optOut: null,
+    };
+  } else {
+    const optIn = tryFindDirectiveEnablingMemoization(
+      fn.node.body.directives,
+      programContext.opts,
+    );
+    if (optIn.isErr()) {
+      /**
+       * If parsing opt-in directive fails, it's most likely that React Compiler
+       * was not tested or rolled out on this function. In that case, we handle
+       * the error and fall back to the safest option which is to not optimize
+       * the function.
+       */
+      handleError(optIn.unwrapErr(), programContext, fn.node.loc ?? null);
+      return null;
+    }
+    directives = {
+      optIn: optIn.unwrapOr(null),
+      optOut: findDirectiveDisablingMemoization(
+        fn.node.body.directives,
+        programContext.opts,
+      ),
     };
   }
 
   let compiledFn: CodegenFunction;
   const compileResult = tryCompileFunction(fn, fnType, programContext);
   if (compileResult.kind === 'error') {
-    if (directives.optOut != null) {
-      logError(compileResult.error, programContext, fn.node.loc ?? null);
-    } else {
+    if (directives.optOut == null) {
       handleError(compileResult.error, programContext, fn.node.loc ?? null);
     }
     const retryResult = retryCompileFunction(fn, fnType, programContext);
@@ -591,7 +679,7 @@ function tryCompileFunction(
         fn,
         programContext.opts.environment,
         fnType,
-        'all_features',
+        programContext.opts.noEmit ? 'lint_only' : 'all_features',
         programContext,
         programContext.opts.logger,
         programContext.filename,
@@ -659,25 +747,31 @@ function applyCompiledFunctions(
   pass: CompilerPass,
   programContext: ProgramContext,
 ): void {
-  const referencedBeforeDeclared =
-    pass.opts.gating != null
-      ? getFunctionReferencedBeforeDeclarationAtTopLevel(program, compiledFns)
-      : null;
+  let referencedBeforeDeclared = null;
   for (const result of compiledFns) {
     const {kind, originalFn, compiledFn} = result;
     const transformedFn = createNewFunctionNode(originalFn, compiledFn);
     programContext.alreadyCompiled.add(transformedFn);
 
-    if (referencedBeforeDeclared != null && kind === 'original') {
-      CompilerError.invariant(pass.opts.gating != null, {
-        reason: "Expected 'gating' import to be present",
-        loc: null,
-      });
+    let dynamicGating: ExternalFunction | null = null;
+    if (originalFn.node.body.type === 'BlockStatement') {
+      const result = findDirectivesDynamicGating(
+        originalFn.node.body.directives,
+        pass.opts,
+      );
+      if (result.isOk()) {
+        dynamicGating = result.unwrap()?.gating ?? null;
+      }
+    }
+    const functionGating = dynamicGating ?? pass.opts.gating;
+    if (kind === 'original' && functionGating != null) {
+      referencedBeforeDeclared ??=
+        getFunctionReferencedBeforeDeclarationAtTopLevel(program, compiledFns);
       insertGatedFunctionDeclaration(
         originalFn,
         transformedFn,
         programContext,
-        pass.opts.gating,
+        functionGating,
         referencedBeforeDeclared.has(result),
       );
     } else {
@@ -698,15 +792,7 @@ function shouldSkipCompilation(
   if (pass.opts.sources) {
     if (pass.filename === null) {
       const error = new CompilerError();
-      error.pushErrorDetail(
-        new CompilerErrorDetail({
-          reason: `Expected a filename but found none.`,
-          description:
-            "When the 'sources' config options is specified, the React compiler will only compile files with a name",
-          severity: ErrorSeverity.InvalidConfig,
-          loc: null,
-        }),
-      );
+      error.pushErrorCode(ErrorCode.FILENAME_NOT_SET);
       handleError(error, pass, null);
       return true;
     }
@@ -733,8 +819,13 @@ function getReactFunctionType(
 ): ReactFunctionType | null {
   const hookPattern = pass.opts.environment.hookPattern;
   if (fn.node.body.type === 'BlockStatement') {
-    if (findDirectiveEnablingMemoization(fn.node.body.directives) != null)
+    const optInDirectives = tryFindDirectiveEnablingMemoization(
+      fn.node.body.directives,
+      pass.opts,
+    );
+    if (optInDirectives.unwrapOr(null) != null) {
       return getComponentOrHookLike(fn, hookPattern) ?? 'Other';
+    }
   }
 
   // Component and hook declarations are known components/hooks
