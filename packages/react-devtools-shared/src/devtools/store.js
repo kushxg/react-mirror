@@ -20,6 +20,9 @@ import {
   TREE_OPERATION_SET_SUBTREE_MODE,
   TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS,
   TREE_OPERATION_UPDATE_TREE_BASE_DURATION,
+  SUSPENSE_TREE_OPERATION_ADD,
+  SUSPENSE_TREE_OPERATION_REMOVE,
+  SUSPENSE_TREE_OPERATION_REORDER_CHILDREN,
 } from '../constants';
 import {ElementTypeRoot} from '../frontend/types';
 import {
@@ -44,6 +47,7 @@ import type {
   Element,
   ComponentFilter,
   ElementType,
+  SuspenseNode,
 } from 'react-devtools-shared/src/frontend/types';
 import type {
   FrontendBridge,
@@ -95,15 +99,17 @@ export default class Store extends EventEmitter<{
   backendVersion: [],
   collapseNodesByDefault: [],
   componentFilters: [],
+  enableSuspenseTab: [],
   error: [Error],
   hookSettings: [$ReadOnly<DevToolsHookSettings>],
   hostInstanceSelected: [Element['id']],
   settingsUpdated: [$ReadOnly<DevToolsHookSettings>],
-  mutated: [[Array<number>, Map<number, number>]],
+  mutated: [[Array<Element['id']>, Map<Element['id'], Element['id']>]],
   recordChangeDescriptions: [],
   roots: [],
   rootSupportsBasicProfiling: [],
   rootSupportsTimelineProfiling: [],
+  suspenseTreeMutated: [],
   supportsNativeStyleEditor: [],
   supportsReloadAndProfile: [],
   unsupportedBridgeProtocolDetected: [],
@@ -126,8 +132,10 @@ export default class Store extends EventEmitter<{
   _componentFilters: Array<ComponentFilter>;
 
   // Map of ID to number of recorded error and warning message IDs.
-  _errorsAndWarnings: Map<number, {errorCount: number, warningCount: number}> =
-    new Map();
+  _errorsAndWarnings: Map<
+    Element['id'],
+    {errorCount: number, warningCount: number},
+  > = new Map();
 
   // At least one of the injected renderers contains (DEV only) owner metadata.
   _hasOwnerMetadata: boolean = false;
@@ -135,7 +143,9 @@ export default class Store extends EventEmitter<{
   // Map of ID to (mutable) Element.
   // Elements are mutated to avoid excessive cloning during tree updates.
   // The InspectedElement Suspense cache also relies on this mutability for its WeakMap usage.
-  _idToElement: Map<number, Element> = new Map();
+  _idToElement: Map<Element['id'], Element> = new Map();
+
+  _idToSuspense: Map<SuspenseNode['id'], SuspenseNode> = new Map();
 
   // Should the React Native style editor panel be shown?
   _isNativeStyleEditorSupported: boolean = false;
@@ -148,7 +158,7 @@ export default class Store extends EventEmitter<{
 
   // Map of element (id) to the set of elements (ids) it owns.
   // This map enables getOwnersListForElement() to avoid traversing the entire tree.
-  _ownersMap: Map<number, Set<number>> = new Map();
+  _ownersMap: Map<Element['id'], Set<Element['id']>> = new Map();
 
   _profilerStore: ProfilerStore;
 
@@ -157,21 +167,24 @@ export default class Store extends EventEmitter<{
   // Incremented each time the store is mutated.
   // This enables a passive effect to detect a mutation between render and commit phase.
   _revision: number = 0;
+  _revisionSuspense: number = 0;
 
   // This Array must be treated as immutable!
   // Passive effects will check it for changes between render and mount.
-  _roots: $ReadOnlyArray<number> = [];
+  _roots: $ReadOnlyArray<Element['id']> = [];
 
-  _rootIDToCapabilities: Map<number, Capabilities> = new Map();
+  _rootIDToCapabilities: Map<Element['id'], Capabilities> = new Map();
 
   // Renderer ID is needed to support inspection fiber props, state, and hooks.
-  _rootIDToRendererID: Map<number, number> = new Map();
+  _rootIDToRendererID: Map<Element['id'], number> = new Map();
 
   // These options may be initially set by a configuration option when constructing the Store.
   _supportsInspectMatchingDOMElement: boolean = false;
   _supportsClickToInspect: boolean = false;
   _supportsTimeline: boolean = false;
   _supportsTraceUpdates: boolean = false;
+  // Dynamically set if the renderer supports the Suspense tab.
+  _supportsSuspenseTab: boolean = false;
 
   _isReloadAndProfileFrontendSupported: boolean = false;
   _isReloadAndProfileBackendSupported: boolean = false;
@@ -187,6 +200,7 @@ export default class Store extends EventEmitter<{
   // Total number of visible elements (within all roots).
   // Used for windowing purposes.
   _weightAcrossRoots: number = 0;
+  _weightAcrossRootsSuspense: number = 0;
 
   _shouldCheckBridgeProtocolCompatibility: boolean = false;
   _hookSettings: $ReadOnly<DevToolsHookSettings> | null = null;
@@ -194,6 +208,10 @@ export default class Store extends EventEmitter<{
 
   // Only used in browser extension for synchronization with built-in Elements panel.
   _lastSelectedHostInstanceElementId: Element['id'] | null = null;
+
+  // Maximum recorded node depth during the lifetime of this Store.
+  // Can only increase: not guaranteed to return maximal value for currently recorded elements.
+  _maximumRecordedDepth = 0;
 
   constructor(bridge: FrontendBridge, config?: Config) {
     super();
@@ -271,6 +289,7 @@ export default class Store extends EventEmitter<{
     bridge.addListener('hookSettings', this.onHookSettings);
     bridge.addListener('backendInitialized', this.onBackendInitialized);
     bridge.addListener('selectElement', this.onHostInstanceSelected);
+    bridge.addListener('enableSuspenseTab', this.onEnableSuspenseTab);
   }
 
   // This is only used in tests to avoid memory leaks.
@@ -278,6 +297,7 @@ export default class Store extends EventEmitter<{
     if (this.roots.length === 0) {
       // The only safe time to assert these maps are empty is when the store is empty.
       this.assertMapSizeMatchesRootCount(this._idToElement, '_idToElement');
+      this.assertMapSizeMatchesRootCount(this._idToSuspense, '_idToSuspense');
       this.assertMapSizeMatchesRootCount(this._ownersMap, '_ownersMap');
     }
 
@@ -410,6 +430,10 @@ export default class Store extends EventEmitter<{
     return this._weightAcrossRoots;
   }
 
+  get numSuspense(): number {
+    return this._weightAcrossRootsSuspense;
+  }
+
   get profilerStore(): ProfilerStore {
     return this._profilerStore;
   }
@@ -430,6 +454,9 @@ export default class Store extends EventEmitter<{
 
   get revision(): number {
     return this._revision;
+  }
+  get revisionSuspense(): number {
+    return this._revisionSuspense;
   }
 
   get rootIDToRendererID(): Map<number, number> {
@@ -587,6 +614,114 @@ export default class Store extends EventEmitter<{
     return element;
   }
 
+  getSuspenseAtIndex(index: number): SuspenseNode | null {
+    if (index < 0 || index >= this.numElements) {
+      console.warn(
+        `Invalid index ${index} specified; store contains ${this.numElements} items.`,
+      );
+
+      return null;
+    }
+
+    // Find which root this suspense is in...
+    let root;
+    let rootWeight = 0;
+    for (let i = 0; i < this._roots.length; i++) {
+      const rootID = this._roots[i];
+      root = this._idToSuspense.get(rootID);
+
+      if (root === undefined) {
+        this._throwAndEmitError(
+          Error(
+            `Couldn't find root with id "${rootID}": no matching suspense node was found in the Store.`,
+          ),
+        );
+
+        return null;
+      }
+
+      if (root.children.length === 0) {
+        continue;
+      }
+
+      if (rootWeight + root.weight > index) {
+        break;
+      } else {
+        rootWeight += root.weight;
+      }
+    }
+
+    if (root === undefined) {
+      return null;
+    }
+
+    // Find the suspense in the tree using the weight of each node...
+    // Skip over the root itself, because shells aren't visible in the Suspense tree.
+    let currentSuspense: SuspenseNode = root;
+    let currentWeight = rootWeight - 1;
+
+    while (index !== currentWeight) {
+      const numChildren = currentSuspense.children.length;
+      for (let i = 0; i < numChildren; i++) {
+        const childID = currentSuspense.children[i];
+        const child = this._idToSuspense.get(childID);
+
+        if (child === undefined) {
+          this._throwAndEmitError(
+            Error(
+              `Couldn't find child suspense with id "${childID}": no matching node was found in the Store.`,
+            ),
+          );
+
+          return null;
+        }
+
+        const childWeight = child.weight;
+
+        if (index <= currentWeight + childWeight) {
+          currentWeight++;
+          currentSuspense = child;
+          break;
+        } else {
+          currentWeight += childWeight;
+        }
+      }
+    }
+
+    return currentSuspense || null;
+  }
+
+  getSuspenseIDAtIndex(index: number): number | null {
+    const suspense = this.getSuspenseAtIndex(index);
+    return suspense === null ? null : suspense.id;
+  }
+
+  getSuspenseByID(id: SuspenseNode['id']): SuspenseNode | null {
+    const suspense = this._idToSuspense.get(id);
+    if (suspense === undefined) {
+      console.warn(`No suspense found with id "${id}"`);
+      return null;
+    }
+
+    return suspense;
+  }
+
+  getNearestSuspense(elementID: Element['id']): SuspenseNode | null {
+    let currentID = elementID;
+    let maybeSuspense = this._idToSuspense.get(currentID);
+    while (maybeSuspense === undefined) {
+      const element = this._idToElement.get(currentID);
+      if (element === undefined) {
+        return null;
+      }
+
+      currentID = element.parentID;
+      maybeSuspense = this._idToSuspense.get(currentID);
+    }
+
+    return maybeSuspense;
+  }
+
   // Returns a tuple of [id, index]
   getElementsWithErrorsAndWarnings(): ErrorAndWarningTuples {
     if (!this._shouldShowWarningsAndErrors) {
@@ -696,6 +831,115 @@ export default class Store extends EventEmitter<{
     }
 
     return index;
+  }
+
+  getIndexOfSuspenseID(id: number): number | null {
+    const suspense = this.getSuspenseByID(id);
+
+    if (suspense === null || suspense.parentID === 0) {
+      return null;
+    }
+
+    // Walk up the tree to the root.
+    // Increment the index by one for each node we encounter,
+    // and by the weight of all nodes to the left of the current one.
+    // This should be a relatively fast way of determining the index of a node within the tree.
+    let previousID = id;
+    let currentID = suspense.parentID;
+    let index = 0;
+    while (true) {
+      const current = this._idToSuspense.get(currentID);
+      if (current === undefined) {
+        return null;
+      }
+
+      const {children} = current;
+      for (let i = 0; i < children.length; i++) {
+        const childID = children[i];
+        if (childID === previousID) {
+          break;
+        }
+
+        const child = this._idToSuspense.get(childID);
+        if (child === undefined) {
+          return null;
+        }
+
+        index += child.weight;
+      }
+
+      if (current.parentID === 0) {
+        // We found the root; stop crawling.
+        break;
+      }
+
+      index++;
+
+      previousID = current.id;
+      currentID = current.parentID;
+    }
+
+    // At this point, the current ID is a root (from the previous loop).
+    // We also need to offset the index by previous root weights.
+    for (let i = 0; i < this._roots.length; i++) {
+      const rootID = this._roots[i];
+      if (rootID === currentID) {
+        break;
+      }
+
+      const root = this._idToSuspense.get(rootID);
+      if (root === undefined) {
+        return null;
+      }
+
+      index += root.weight;
+    }
+
+    return index;
+  }
+
+  isDescendantOf(parentId: number, descendantId: number): boolean {
+    if (descendantId === 0) {
+      return false;
+    }
+
+    const descendant = this.getElementByID(descendantId);
+    if (descendant === null) {
+      return false;
+    }
+
+    if (descendant.parentID === parentId) {
+      return true;
+    }
+
+    const parent = this.getElementByID(parentId);
+    if (!parent || parent.depth >= descendant.depth) {
+      return false;
+    }
+
+    return this.isDescendantOf(parentId, descendant.parentID);
+  }
+
+  /**
+   * Returns index of the lowest descendant element, if available.
+   * May not be the deepest element, the lowest is used in a sense of bottom-most from UI Tree representation perspective.
+   */
+  getIndexOfLowestDescendantElement(element: Element): number | null {
+    let current: null | Element = element;
+    while (current !== null) {
+      if (current.isCollapsed || current.children.length === 0) {
+        if (current === element) {
+          return null;
+        }
+
+        return this.getIndexOfElementID(current.id);
+      } else {
+        const lastChildID = current.children[current.children.length - 1];
+        current = this.getElementByID(lastChildID);
+      }
+    }
+
+    return null;
   }
 
   getOwnersListForElement(ownerID: number): Array<Element> {
@@ -905,6 +1149,19 @@ export default class Store extends EventEmitter<{
     }
   };
 
+  _adjustParentSuspenseTreeWeight: (
+    parentElement: ?SuspenseNode,
+    weightDelta: number,
+  ) => void = (parentElement, weightDelta) => {
+    while (parentElement != null) {
+      parentElement.weight += weightDelta;
+
+      parentElement = this._idToSuspense.get(parentElement.parentID);
+    }
+
+    this._weightAcrossRootsSuspense += weightDelta;
+  };
+
   _recursivelyUpdateSubtree(
     id: number,
     callback: (element: Element) => void,
@@ -937,6 +1194,7 @@ export default class Store extends EventEmitter<{
 
     let haveRootsChanged = false;
     let haveErrorsOrWarningsChanged = false;
+    let hasSuspenseTreeChanged = false;
 
     // The first two values are always rendererID and rootID
     const rendererID = operations[0];
@@ -1089,9 +1347,15 @@ export default class Store extends EventEmitter<{
               compiledWithForget,
             } = parseElementDisplayNameFromBackend(displayName, type);
 
+            const elementDepth = parentElement.depth + 1;
+            this._maximumRecordedDepth = Math.max(
+              this._maximumRecordedDepth,
+              elementDepth,
+            );
+
             const element: Element = {
               children: [],
-              depth: parentElement.depth + 1,
+              depth: elementDepth,
               displayName: displayNameWithoutHOCs,
               hocDisplayNames,
               id,
@@ -1211,6 +1475,7 @@ export default class Store extends EventEmitter<{
           const recursivelyDeleteElements = (elementID: number) => {
             const element = this._idToElement.get(elementID);
             this._idToElement.delete(elementID);
+            this._idToSuspense.delete(elementID);
             if (element) {
               // Mostly for Flow's sake
               for (let index = 0; index < element.children.length; index++) {
@@ -1230,12 +1495,22 @@ export default class Store extends EventEmitter<{
             break;
           }
 
+          const suspenseNode = this._idToSuspense.get(id);
+          if (suspenseNode === undefined) {
+            this._throwAndEmitError(
+              Error(`Root "${id}" has no Suspense node.`),
+            );
+
+            break;
+          }
+
           recursivelyDeleteElements(id);
 
           this._rootIDToCapabilities.delete(id);
           this._rootIDToRendererID.delete(id);
           this._roots = this._roots.filter(rootID => rootID !== id);
           this._weightAcrossRoots -= root.weight;
+          this._weightAcrossRootsSuspense -= suspenseNode.weight;
           break;
         }
         case TREE_OPERATION_REORDER_CHILDREN: {
@@ -1311,7 +1586,7 @@ export default class Store extends EventEmitter<{
           // The profiler UI uses them lazily in order to generate the tree.
           i += 3;
           break;
-        case TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS:
+        case TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS: {
           const id = operations[i + 1];
           const errorCount = operations[i + 2];
           const warningCount = operations[i + 3];
@@ -1325,6 +1600,195 @@ export default class Store extends EventEmitter<{
           }
           haveErrorsOrWarningsChanged = true;
           break;
+        }
+        case SUSPENSE_TREE_OPERATION_ADD: {
+          const id = operations[i + 1];
+          const parentID = operations[i + 2];
+          const nameStringID = operations[i + 3];
+          let name = stringTable[nameStringID];
+
+          if (this._idToSuspense.has(id)) {
+            this._throwAndEmitError(
+              Error(
+                `Cannot add suspense node "${id}" because a suspense node with that id is already in the Store.`,
+              ),
+            );
+          }
+
+          let isRoot;
+          const element = this._idToElement.get(id);
+          if (element === undefined) {
+            this._throwAndEmitError(
+              Error(
+                `Cannot add suspense node "${id}" because no matching element was found in the Store.`,
+              ),
+            );
+          } else {
+            if (name === null) {
+              // The boundary isn't explicitly named.
+              // Pick a sensible default.
+              // TODO: Use key
+              const owner = this._idToElement.get(element.ownerID);
+              if (owner !== undefined) {
+                // TODO: This is clowny
+                name = `${owner.displayName || 'Unknown'}>?`;
+              }
+            }
+
+            isRoot = element.type === ElementTypeRoot;
+          }
+
+          if (__DEBUG__) {
+            debug('Suspense Add', `node ${id} as child of ${parentID}`);
+          }
+
+          let parentSuspense: ?SuspenseNode = null;
+          if (parentID !== 0) {
+            parentSuspense = this._idToSuspense.get(parentID);
+            if (parentSuspense === undefined) {
+              this._throwAndEmitError(
+                Error(
+                  `Cannot add suspense child "${id}" to parent suspense "${parentID}" because parent suspense node was not found in the Store.`,
+                ),
+              );
+
+              break;
+            }
+
+            parentSuspense.children.push(id);
+          }
+
+          if (name === null) {
+            name = 'Unknown';
+          }
+
+          const weight = isRoot ? 0 : 1;
+          this._idToSuspense.set(id, {
+            id,
+            parentID,
+            children: [],
+            name,
+            weight,
+          });
+          if (!isRoot) {
+            this._adjustParentSuspenseTreeWeight(parentSuspense, 1);
+          }
+
+          i += 4;
+
+          hasSuspenseTreeChanged = true;
+          break;
+        }
+        case SUSPENSE_TREE_OPERATION_REMOVE: {
+          const removeLength = operations[i + 1];
+          i += 2;
+
+          for (let removeIndex = 0; removeIndex < removeLength; removeIndex++) {
+            const id = operations[i];
+            const suspense = this._idToSuspense.get(id);
+
+            if (suspense === undefined) {
+              this._throwAndEmitError(
+                Error(
+                  `Cannot remove suspense node "${id}" because no matching node was found in the Store.`,
+                ),
+              );
+
+              break;
+            }
+
+            i += 1;
+
+            const {children, parentID, weight} = suspense;
+            if (children.length > 0) {
+              this._throwAndEmitError(
+                Error(`Suspense node "${id}" was removed before its children.`),
+              );
+            }
+
+            this._idToSuspense.delete(id);
+
+            let parentSuspense: ?SuspenseNode = null;
+            if (parentID === 0) {
+              if (__DEBUG__) {
+                debug('Suspense remove', `node ${id} root`);
+              }
+            } else {
+              if (__DEBUG__) {
+                debug('Suspense Remove', `node ${id} from parent ${parentID}`);
+              }
+
+              parentSuspense = this._idToSuspense.get(parentID);
+              if (parentSuspense === undefined) {
+                this._throwAndEmitError(
+                  Error(
+                    `Cannot remove suspense node "${id}" from parent "${parentID}" because no matching node was found in the Store.`,
+                  ),
+                );
+
+                break;
+              }
+
+              const index = parentSuspense.children.indexOf(id);
+              parentSuspense.children.splice(index, 1);
+            }
+
+            this._adjustParentSuspenseTreeWeight(parentSuspense, -weight);
+          }
+
+          hasSuspenseTreeChanged = true;
+          break;
+        }
+        case SUSPENSE_TREE_OPERATION_REORDER_CHILDREN: {
+          const id = operations[i + 1];
+          const numChildren = operations[i + 2];
+          i += 3;
+
+          const suspense = this._idToSuspense.get(id);
+          if (suspense === undefined) {
+            this._throwAndEmitError(
+              Error(
+                `Cannot reorder children for suspense node "${id}" because no matching node was found in the Store.`,
+              ),
+            );
+
+            break;
+          }
+
+          const children = suspense.children;
+          if (children.length !== numChildren) {
+            this._throwAndEmitError(
+              Error(
+                `Suspense children cannot be added or removed during a reorder operation.`,
+              ),
+            );
+          }
+
+          for (let j = 0; j < numChildren; j++) {
+            const childID = operations[i + j];
+            children[j] = childID;
+            if (__DEV__) {
+              // This check is more expensive so it's gated by __DEV__.
+              const childSuspense = this._idToSuspense.get(childID);
+              if (childSuspense == null || childSuspense.parentID !== id) {
+                console.error(
+                  `Suspense children cannot be added or removed during a reorder operation.`,
+                );
+              }
+            }
+          }
+          i += numChildren;
+
+          if (__DEBUG__) {
+            debug(
+              'Re-order',
+              `Suspense node ${id} children ${children.join(',')}`,
+            );
+          }
+
+          hasSuspenseTreeChanged = true;
+          break;
+        }
         default:
           this._throwAndEmitError(
             new UnsupportedBridgeOperationError(
@@ -1335,6 +1799,9 @@ export default class Store extends EventEmitter<{
     }
 
     this._revision++;
+    if (hasSuspenseTreeChanged) {
+      this._revisionSuspense++;
+    }
 
     // Any time the tree changes (e.g. elements added, removed, or reordered) cached indices may be invalid.
     this._cachedErrorAndWarningTuples = null;
@@ -1391,6 +1858,10 @@ export default class Store extends EventEmitter<{
       ) {
         this.emit('rootSupportsTimelineProfiling');
       }
+    }
+
+    if (hasSuspenseTreeChanged) {
+      this.emit('suspenseTreeMutated');
     }
 
     if (__DEBUG__) {
@@ -1536,6 +2007,14 @@ export default class Store extends EventEmitter<{
     }
   };
 
+  /**
+   * Maximum recorded node depth during the lifetime of this Store.
+   * Can only increase: not guaranteed to return maximal value for currently recorded elements.
+   */
+  getMaximumRecordedDepth(): number {
+    return this._maximumRecordedDepth;
+  }
+
   updateHookSettings: (settings: $ReadOnly<DevToolsHookSettings>) => void =
     settings => {
       this._hookSettings = settings;
@@ -1561,6 +2040,15 @@ export default class Store extends EventEmitter<{
       this.emit('mutated', [[], new Map()]);
     }
   }
+
+  get supportsSuspenseTab(): boolean {
+    return this._supportsSuspenseTab;
+  }
+
+  onEnableSuspenseTab = (): void => {
+    this._supportsSuspenseTab = true;
+    this.emit('enableSuspenseTab');
+  };
 
   // The Store should never throw an Error without also emitting an event.
   // Otherwise Store errors will be invisible to users,

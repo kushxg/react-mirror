@@ -60,6 +60,11 @@ export type StateContext = {
   // Inspection element panel
   inspectedElementID: number | null,
   inspectedElementIndex: number | null,
+
+  // Suspense
+  numSuspense: number,
+  selectedSuspenseID: number | null,
+  selectedSuspenseIndex: number | null,
 };
 
 type ACTION_GO_TO_NEXT_SEARCH_RESULT = {
@@ -121,6 +126,12 @@ type ACTION_SET_SEARCH_TEXT = {
   type: 'SET_SEARCH_TEXT',
   payload: string,
 };
+type ACTION_SELECT_PREVIOUS_SUSPENSE_IN_TREE = {
+  type: 'SELECT_PREVIOUS_SUSPENSE_IN_TREE',
+};
+type ACTION_SELECT_NEXT_SUSPENSE_IN_TREE = {
+  type: 'SELECT_NEXT_SUSPENSE_IN_TREE',
+};
 
 type Action =
   | ACTION_GO_TO_NEXT_SEARCH_RESULT
@@ -140,7 +151,9 @@ type Action =
   | ACTION_SELECT_PREVIOUS_SIBLING_IN_TREE
   | ACTION_SELECT_OWNER_LIST_NEXT_ELEMENT_IN_TREE
   | ACTION_SELECT_OWNER_LIST_PREVIOUS_ELEMENT_IN_TREE
-  | ACTION_SET_SEARCH_TEXT;
+  | ACTION_SET_SEARCH_TEXT
+  | ACTION_SELECT_PREVIOUS_SUSPENSE_IN_TREE
+  | ACTION_SELECT_NEXT_SUSPENSE_IN_TREE;
 
 export type DispatcherContext = (action: Action) => void;
 
@@ -170,6 +183,11 @@ type State = {
   // Inspection element panel
   inspectedElementID: number | null,
   inspectedElementIndex: number | null,
+
+  // Suspense
+  numSuspense: number,
+  selectedSuspenseID: number | null,
+  selectedSuspenseIndex: number | null,
 };
 
 function reduceTreeState(store: Store, state: State, action: Action): State {
@@ -178,6 +196,9 @@ function reduceTreeState(store: Store, state: State, action: Action): State {
     ownerSubtreeLeafElementID,
     inspectedElementID,
     inspectedElementIndex,
+    selectedSuspenseID,
+    selectedSuspenseIndex,
+    numSuspense,
   } = state;
   const ownerID = state.ownerID;
 
@@ -188,6 +209,7 @@ function reduceTreeState(store: Store, state: State, action: Action): State {
     switch (action.type) {
       case 'HANDLE_STORE_MUTATION':
         numElements = store.numElements;
+        numSuspense = store.numSuspense;
 
         // If the currently-selected Element has been removed from the tree, update selection state.
         const removedIDs = action.payload[1];
@@ -447,6 +469,37 @@ function reduceTreeState(store: Store, state: State, action: Action): State {
         lookupIDForIndex = false;
         break;
       }
+      case 'SELECT_NEXT_SUSPENSE_IN_TREE': {
+        if (
+          selectedSuspenseIndex === null ||
+          selectedSuspenseIndex + 1 >= numSuspense
+        ) {
+          selectedSuspenseIndex = 0;
+        } else {
+          selectedSuspenseIndex++;
+        }
+        selectedSuspenseID = store.getSuspenseIDAtIndex(selectedSuspenseIndex);
+        inspectedElementID = selectedSuspenseID;
+        inspectedElementIndex =
+          inspectedElementID === null
+            ? null
+            : store.getIndexOfElementID(inspectedElementID);
+        break;
+      }
+      case 'SELECT_PREVIOUS_SUSPENSE_IN_TREE': {
+        if (selectedSuspenseIndex === null || selectedSuspenseIndex === 0) {
+          selectedSuspenseIndex = numSuspense - 1;
+        } else {
+          selectedSuspenseIndex--;
+        }
+        selectedSuspenseID = store.getSuspenseIDAtIndex(selectedSuspenseIndex);
+        inspectedElementID = selectedSuspenseID;
+        inspectedElementIndex =
+          inspectedElementID === null
+            ? null
+            : store.getIndexOfElementID(inspectedElementID);
+        break;
+      }
       default:
         // React can bailout of no-op updates.
         return state;
@@ -474,6 +527,10 @@ function reduceTreeState(store: Store, state: State, action: Action): State {
     ownerSubtreeLeafElementID,
     inspectedElementIndex,
     inspectedElementID,
+
+    numSuspense,
+    selectedSuspenseID,
+    selectedSuspenseIndex,
   };
 }
 
@@ -794,6 +851,36 @@ function reduceOwnersState(store: Store, state: State, action: Action): State {
   };
 }
 
+function reduceSuspenseTreeState(
+  store: Store,
+  previousState: State,
+  state: State,
+): State {
+  let {selectedSuspenseID, selectedSuspenseIndex} = state;
+  const {inspectedElementID} = state;
+  if (
+    previousState.inspectedElementID !== inspectedElementID &&
+    inspectedElementID !== selectedSuspenseID
+  ) {
+    // We changed the inspected element. Select the nearest Suspense
+    // boundary of the newly inspected element.
+    if (inspectedElementID !== null) {
+      const nearestSuspense = store.getNearestSuspense(inspectedElementID);
+      if (nearestSuspense !== null) {
+        selectedSuspenseID = nearestSuspense.id;
+        selectedSuspenseIndex = store.getIndexOfSuspenseID(selectedSuspenseID);
+      }
+    } else {
+      selectedSuspenseID = null;
+      selectedSuspenseIndex = null;
+    }
+
+    return {...state, selectedSuspenseID, selectedSuspenseIndex};
+  }
+
+  return state;
+}
+
 type Props = {
   children: React$Node,
 
@@ -802,6 +889,55 @@ type Props = {
   defaultInspectedElementID?: ?number,
   defaultInspectedElementIndex?: ?number,
 };
+
+function getInitialState({
+  defaultOwnerID,
+  defaultInspectedElementID,
+  defaultInspectedElementIndex,
+  store,
+}: {
+  defaultOwnerID?: ?number,
+  defaultInspectedElementID?: ?number,
+  defaultInspectedElementIndex?: ?number,
+  store: Store,
+}): State {
+  const inspectedElementID =
+    defaultInspectedElementID != null
+      ? defaultInspectedElementID
+      : store.lastSelectedHostInstanceElementId;
+
+  // TODO:
+  const selectedSuspenseID = null;
+  const selectedSuspenseIndex = null;
+  return {
+    // Tree
+    numElements: store.numElements,
+    ownerSubtreeLeafElementID: null,
+
+    // Search
+    searchIndex: null,
+    searchResults: [],
+    searchText: '',
+
+    // Owners
+    ownerID: defaultOwnerID == null ? null : defaultOwnerID,
+    ownerFlatTree: null,
+
+    // Inspection element panel
+    inspectedElementID: inspectedElementID,
+    inspectedElementIndex:
+      defaultInspectedElementIndex != null
+        ? defaultInspectedElementIndex
+        : store.lastSelectedHostInstanceElementId
+          ? store.getIndexOfElementID(store.lastSelectedHostInstanceElementId)
+          : null,
+
+    // Suspense
+    numSuspense: store.numSuspense,
+    selectedSuspenseID: selectedSuspenseID,
+    selectedSuspenseIndex: selectedSuspenseIndex,
+  };
+}
 
 // TODO Remove TreeContextController wrapper element once global Context.write API exists.
 function TreeContextController({
@@ -819,7 +955,7 @@ function TreeContextController({
   // so it's okay for the reducer to have an empty dependencies array.
   const reducer = useMemo(
     () =>
-      (state: State, action: Action): State => {
+      (previousState: State, action: Action): State => {
         const {type} = action;
         switch (type) {
           case 'GO_TO_NEXT_SEARCH_RESULT':
@@ -840,9 +976,13 @@ function TreeContextController({
           case 'SELECT_PREVIOUS_SIBLING_IN_TREE':
           case 'SELECT_OWNER':
           case 'SET_SEARCH_TEXT':
+          case 'SELECT_PREVIOUS_SUSPENSE_IN_TREE':
+          case 'SELECT_NEXT_SUSPENSE_IN_TREE':
+            let state = previousState;
             state = reduceTreeState(store, state, action);
             state = reduceSearchState(store, state, action);
             state = reduceOwnersState(store, state, action);
+            state = reduceSuspenseTreeState(store, previousState, state);
 
             // TODO(hoxyq): review
             // If the selected ID is in a collapsed subtree, reset the selected index to null.
@@ -866,32 +1006,16 @@ function TreeContextController({
     [store],
   );
 
-  const [state, dispatch] = useReducer(reducer, {
-    // Tree
-    numElements: store.numElements,
-    ownerSubtreeLeafElementID: null,
-
-    // Search
-    searchIndex: null,
-    searchResults: [],
-    searchText: '',
-
-    // Owners
-    ownerID: defaultOwnerID == null ? null : defaultOwnerID,
-    ownerFlatTree: null,
-
-    // Inspection element panel
-    inspectedElementID:
-      defaultInspectedElementID != null
-        ? defaultInspectedElementID
-        : store.lastSelectedHostInstanceElementId,
-    inspectedElementIndex:
-      defaultInspectedElementIndex != null
-        ? defaultInspectedElementIndex
-        : store.lastSelectedHostInstanceElementId
-          ? store.getIndexOfElementID(store.lastSelectedHostInstanceElementId)
-          : null,
-  });
+  const [state, dispatch] = useReducer(
+    reducer,
+    {
+      defaultOwnerID,
+      defaultInspectedElementID,
+      defaultInspectedElementIndex,
+      store,
+    },
+    getInitialState,
+  );
   const transitionDispatch = useMemo(
     () => (action: Action) =>
       startTransition(() => {
@@ -931,7 +1055,7 @@ function TreeContextController({
       Array<number>,
       Map<number, number>,
     ]) => {
-      transitionDispatch({
+      dispatch({
         type: 'HANDLE_STORE_MUTATION',
         payload: [addedElementIDs, removedElementIDs],
       });
@@ -942,7 +1066,7 @@ function TreeContextController({
       // At the moment, we can treat this as a mutation.
       // We don't know which Elements were newly added/removed, but that should be okay in this case.
       // It would only impact the search state, which is unlikely to exist yet at this point.
-      transitionDispatch({
+      dispatch({
         type: 'HANDLE_STORE_MUTATION',
         payload: [[], new Map()],
       });
