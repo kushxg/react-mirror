@@ -14,6 +14,7 @@ import type {ReactServerValue} from 'react-client/src/ReactFlightReplyClient';
 
 import {
   createResponse,
+  createStreamState,
   getRoot,
   reportGlobalError,
   processBinaryChunk,
@@ -75,6 +76,8 @@ export type Options = {
   temporaryReferences?: TemporaryReferenceSet,
   replayConsoleLogs?: boolean,
   environmentName?: string,
+  // For the Edge client we only support a single-direction debug channel.
+  debugChannel?: {readable?: ReadableStream, ...},
 };
 
 function createResponseFromOptions(options?: Options) {
@@ -99,7 +102,9 @@ function createResponseFromOptions(options?: Options) {
 function startReadingFromStream(
   response: FlightResponse,
   stream: ReadableStream,
+  isSecondaryStream: boolean,
 ): void {
+  const streamState = createStreamState();
   const reader = stream.getReader();
   function progress({
     done,
@@ -110,11 +115,15 @@ function startReadingFromStream(
     ...
   }): void | Promise<void> {
     if (done) {
-      close(response);
+      // If we're the secondary stream, then we don't close the response until
+      // the debug channel closes.
+      if (!isSecondaryStream) {
+        close(response);
+      }
       return;
     }
     const buffer: Uint8Array = (value: any);
-    processBinaryChunk(response, buffer);
+    processBinaryChunk(response, streamState, buffer);
     return reader.read().then(progress).catch(error);
   }
   function error(e: any) {
@@ -128,7 +137,19 @@ export function createFromReadableStream<T>(
   options?: Options,
 ): Thenable<T> {
   const response: FlightResponse = createResponseFromOptions(options);
-  startReadingFromStream(response, stream);
+
+  if (
+    __DEV__ &&
+    options &&
+    options.debugChannel &&
+    options.debugChannel.readable
+  ) {
+    startReadingFromStream(response, options.debugChannel.readable, false);
+    startReadingFromStream(response, stream, true);
+  } else {
+    startReadingFromStream(response, stream, false);
+  }
+
   return getRoot(response);
 }
 
@@ -139,7 +160,17 @@ export function createFromFetch<T>(
   const response: FlightResponse = createResponseFromOptions(options);
   promiseForResponse.then(
     function (r) {
-      startReadingFromStream(response, (r.body: any));
+      if (
+        __DEV__ &&
+        options &&
+        options.debugChannel &&
+        options.debugChannel.readable
+      ) {
+        startReadingFromStream(response, options.debugChannel.readable, false);
+        startReadingFromStream(response, (r.body: any), true);
+      } else {
+        startReadingFromStream(response, (r.body: any), false);
+      }
     },
     function (e) {
       reportGlobalError(response, e);

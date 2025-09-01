@@ -55,7 +55,6 @@ import {
   ConcurrentMode,
   StrictEffectsMode,
   StrictLegacyMode,
-  NoStrictPassiveEffectsMode,
 } from './ReactTypeOfMode';
 import {
   NoLane,
@@ -123,7 +122,10 @@ import {
   markStateUpdateScheduled,
   setIsStrictModeForDevtools,
 } from './ReactFiberDevToolsHook';
-import {startUpdateTimerByLane} from './ReactProfilerTimer';
+import {
+  startUpdateTimerByLane,
+  startHostActionTimer,
+} from './ReactProfilerTimer';
 import {createCache} from './ReactFiberCacheComponent';
 import {
   createUpdate as createLegacyQueueUpdate,
@@ -628,6 +630,16 @@ export function renderWithHooks<Props, SecondArg>(
   return children;
 }
 
+function isRecursiveComponent(currentFiber) {
+  while (currentFiber.return) {
+    if (currentFiber.return.type === currentFiber.type) {
+      return true;
+    }
+    currentFiber = currentFiber.return;
+  }
+  return false;
+}
+
 function finishRenderingHooks<Props, SecondArg>(
   current: Fiber | null,
   workInProgress: Fiber,
@@ -673,6 +685,7 @@ function finishRenderingHooks<Props, SecondArg>(
     // render. If this fires, it suggests that we incorrectly reset the static
     // flags in some other part of the codebase. This has happened before, for
     // example, in the SuspenseList implementation.
+
     if (
       current !== null &&
       (current.flags & StaticMaskEffect) !==
@@ -682,7 +695,8 @@ function finishRenderingHooks<Props, SecondArg>(
       // need to mark fibers that commit in an incomplete state, somehow. For
       // now I'll disable the warning that most of the bugs that would trigger
       // it are either exclusive to concurrent mode or exist in both.
-      (disableLegacyMode || (current.mode & ConcurrentMode) !== NoMode)
+      (disableLegacyMode || (current.mode & ConcurrentMode) !== NoMode) &&
+      !isRecursiveComponent(workInProgress)
     ) {
       console.error(
         'Internal React error: Expected static flag was missing. Please ' +
@@ -1206,7 +1220,7 @@ function useMemoCache(size: number): Array<mixed> {
               ? currentMemoCache.data
               : // Clone the memo cache before each render (copy-on-write)
                 currentMemoCache.data.map(array => array.slice()),
-            index: 0,
+            index: 0 as number,
           };
         }
       }
@@ -1216,7 +1230,7 @@ function useMemoCache(size: number): Array<mixed> {
   if (memoCache == null) {
     memoCache = {
       data: [],
-      index: 0,
+      index: 0 as number,
     };
   }
   if (updateQueue === null) {
@@ -2672,8 +2686,7 @@ function mountEffect(
 ): void {
   if (
     __DEV__ &&
-    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode &&
-    (currentlyRenderingFiber.mode & NoStrictPassiveEffectsMode) === NoMode
+    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode
   ) {
     mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
@@ -3241,6 +3254,8 @@ export function startHostTransition<F>(
     BasicStateAction<Thenable<TransitionStatus> | TransitionStatus>,
   > = stateHook.queue;
 
+  startHostActionTimer(formFiber);
+
   startTransition(
     formFiber,
     queue,
@@ -3446,7 +3461,7 @@ function mountId(): string {
     const treeId = getTreeId();
 
     // Use a captial R prefix for server-generated ids.
-    id = '\u00AB' + identifierPrefix + 'R' + treeId;
+    id = '_' + identifierPrefix + 'R_' + treeId;
 
     // Unless this is the first id at this level, append a number at the end
     // that represents the position of this useId hook among all the useId
@@ -3456,16 +3471,11 @@ function mountId(): string {
       id += 'H' + localId.toString(32);
     }
 
-    id += '\u00BB';
+    id += '_';
   } else {
     // Use a lowercase r prefix for client-generated ids.
     const globalClientId = globalClientIdCounter++;
-    id =
-      '\u00AB' +
-      identifierPrefix +
-      'r' +
-      globalClientId.toString(32) +
-      '\u00BB';
+    id = '_' + identifierPrefix + 'r_' + globalClientId.toString(32) + '_';
   }
 
   hook.memoizedState = id;
