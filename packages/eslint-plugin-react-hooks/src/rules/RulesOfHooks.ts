@@ -7,7 +7,16 @@
 /* eslint-disable no-for-of-loops/no-for-of-loops */
 
 import type {Rule, Scope} from 'eslint';
-import type {CallExpression, DoWhileStatement, Node} from 'estree';
+import type {
+  CallExpression,
+  CatchClause,
+  DoWhileStatement,
+  Expression,
+  Identifier,
+  Node,
+  Super,
+  TryStatement,
+} from 'estree';
 
 // @ts-expect-error untyped module
 import CodePathAnalyzer from '../code-path-analysis/code-path-analyzer';
@@ -111,6 +120,36 @@ function isInsideDoWhileLoop(node: Node | undefined): node is DoWhileStatement {
   return false;
 }
 
+function isInsideTryCatch(
+  node: Node | undefined,
+): node is TryStatement | CatchClause {
+  while (node) {
+    if (node.type === 'TryStatement' || node.type === 'CatchClause') {
+      return true;
+    }
+    node = node.parent;
+  }
+  return false;
+}
+
+function getNodeWithoutReactNamespace(
+  node: Expression | Super,
+): Expression | Identifier | Super {
+  if (
+    node.type === 'MemberExpression' &&
+    node.object.type === 'Identifier' &&
+    node.object.name === 'React' &&
+    node.property.type === 'Identifier' &&
+    !node.computed
+  ) {
+    return node.property;
+  }
+  return node;
+}
+
+function isUseEffectIdentifier(node: Node): boolean {
+  return node.type === 'Identifier' && node.name === 'useEffect';
+}
 function isUseEffectEventIdentifier(node: Node): boolean {
   if (__EXPERIMENTAL__) {
     return node.type === 'Identifier' && node.name === 'useEffectEvent';
@@ -120,6 +159,26 @@ function isUseEffectEventIdentifier(node: Node): boolean {
 
 function isUseIdentifier(node: Node): boolean {
   return isReactFunction(node, 'use');
+}
+
+/**
+ * Checks if an anonymous function is being passed as a prop that starts with "use"
+ * This indicates it should be treated as a custom hook rather than a callback
+ */
+function isAnonymousFunctionPassedAsHookProp(node: Node): boolean {
+  // Check if this function is the value of a JSX attribute
+  if (
+    node.parent &&
+    node.parent.type === 'JSXExpressionContainer' &&
+    node.parent.parent &&
+    node.parent.parent.type === 'JSXAttribute' &&
+    node.parent.parent.name &&
+    node.parent.parent.name.type === 'JSXIdentifier'
+  ) {
+    const propName = node.parent.parent.name.name;
+    return typeof propName === 'string' && isHookName(propName);
+  }
+  return false;
 }
 
 const rule = {
@@ -532,6 +591,16 @@ const rule = {
               continue;
             }
 
+            // Report an error if use() is called inside try/catch.
+            if (isUseIdentifier(hook) && isInsideTryCatch(hook)) {
+              context.report({
+                node: hook,
+                message: `React Hook "${getSourceCode().getText(
+                  hook,
+                )}" cannot be called in a try/catch block.`,
+              });
+            }
+
             // Report an error if a hook may be called more then once.
             // `use(...)` can be called in loops.
             if (
@@ -541,7 +610,9 @@ const rule = {
               context.report({
                 node: hook,
                 message:
-                  `React Hook "${getSourceCode().getText(hook)}" may be executed ` +
+                  `React Hook "${getSourceCode().getText(
+                    hook,
+                  )}" may be executed ` +
                   'more than once. Possibly because it is called in a loop. ' +
                   'React Hooks must be called in the exact same order in ' +
                   'every component render.',
@@ -596,7 +667,9 @@ const rule = {
             ) {
               // Custom message for hooks inside a class
               const message =
-                `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
+                `React Hook "${getSourceCode().getText(
+                  hook,
+                )}" cannot be called ` +
                 'in a class component. React Hooks must be called in a ' +
                 'React function component or a custom React Hook function.';
               context.report({node: hook, message});
@@ -613,7 +686,9 @@ const rule = {
             } else if (codePathNode.type === 'Program') {
               // These are dangerous if you have inline requires enabled.
               const message =
-                `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
+                `React Hook "${getSourceCode().getText(
+                  hook,
+                )}" cannot be called ` +
                 'at the top level. React Hooks must be called in a ' +
                 'React function component or a custom React Hook function.';
               context.report({node: hook, message});
@@ -624,9 +699,13 @@ const rule = {
               // enough in the common case that the incorrect message in
               // uncommon cases doesn't matter.
               // `use(...)` can be called in callbacks.
-              if (isSomewhereInsideComponentOrHook && !isUseIdentifier(hook)) {
+              const isPassedAsHookProp = isAnonymousFunctionPassedAsHookProp(codePathNode);
+              
+              if (isSomewhereInsideComponentOrHook && !isUseIdentifier(hook) && !isPassedAsHookProp) {
                 const message =
-                  `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
+                  `React Hook "${getSourceCode().getText(
+                    hook,
+                  )}" cannot be called ` +
                   'inside a callback. React Hooks must be called in a ' +
                   'React function component or a custom React Hook function.';
                 context.report({node: hook, message});
@@ -666,10 +745,11 @@ const rule = {
 
         // useEffectEvent: useEffectEvent functions can be passed by reference within useEffect as well as in
         // another useEffectEvent
+        // Check all `useEffect` and `React.useEffect`, `useEffectEvent`, and `React.useEffectEvent`
+        const nodeWithoutNamespace = getNodeWithoutReactNamespace(node.callee);
         if (
-          node.callee.type === 'Identifier' &&
-          (node.callee.name === 'useEffect' ||
-            isUseEffectEventIdentifier(node.callee)) &&
+          (isUseEffectIdentifier(nodeWithoutNamespace) ||
+            isUseEffectEventIdentifier(nodeWithoutNamespace)) &&
           node.arguments.length > 0
         ) {
           // Denote that we have traversed into a useEffect call, and stash the CallExpr for
@@ -681,18 +761,18 @@ const rule = {
       Identifier(node) {
         // This identifier resolves to a useEffectEvent function, but isn't being referenced in an
         // effect or another event function. It isn't being called either.
-        if (
-          lastEffect == null &&
-          useEffectEventFunctions.has(node) &&
-          node.parent.type !== 'CallExpression'
-        ) {
+        if (lastEffect == null && useEffectEventFunctions.has(node)) {
+          const message =
+            `\`${getSourceCode().getText(
+              node,
+            )}\` is a function created with React Hook "useEffectEvent", and can only be called from ` +
+            'the same component.' +
+            (node.parent.type === 'CallExpression'
+              ? ''
+              : ' They cannot be assigned to variables or passed down.');
           context.report({
             node,
-            message:
-              `\`${getSourceCode().getText(
-                node,
-              )}\` is a function created with React Hook "useEffectEvent", and can only be called from ` +
-              'the same component. They cannot be assigned to variables or passed down.',
+            message,
           });
         }
       },
