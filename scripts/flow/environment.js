@@ -29,6 +29,67 @@ declare module 'create-react-class' {
   declare const exports: $FlowFixMe;
 }
 
+declare module 'error-stack-parser' {
+  // flow-typed signature: 132e48034ef4756600e1d98681a166b5
+  // flow-typed version: c6154227d1/error-stack-parser_v2.x.x/flow_>=v0.104.x
+
+  declare interface StackFrame {
+    constructor(object: StackFrame): StackFrame;
+
+    isConstructor?: boolean;
+    getIsConstructor(): boolean;
+    setIsConstructor(): void;
+
+    isEval?: boolean;
+    getIsEval(): boolean;
+    setIsEval(): void;
+
+    isNative?: boolean;
+    getIsNative(): boolean;
+    setIsNative(): void;
+
+    isTopLevel?: boolean;
+    getIsTopLevel(): boolean;
+    setIsTopLevel(): void;
+
+    columnNumber?: number;
+    getColumnNumber(): number;
+    setColumnNumber(): void;
+
+    lineNumber?: number;
+    getLineNumber(): number;
+    setLineNumber(): void;
+
+    fileName?: string;
+    getFileName(): string;
+    setFileName(): void;
+
+    functionName?: string;
+    getFunctionName(): string;
+    setFunctionName(): void;
+
+    source?: string;
+    getSource(): string;
+    setSource(): void;
+
+    args?: any[];
+    getArgs(): any[];
+    setArgs(): void;
+
+    evalOrigin?: StackFrame;
+    getEvalOrigin(): StackFrame;
+    setEvalOrigin(): void;
+
+    toString(): string;
+  }
+
+  declare class ErrorStackParser {
+    parse(error: Error): Array<StackFrame>;
+  }
+
+  declare module.exports: ErrorStackParser;
+}
+
 declare interface ConsoleTask {
   run<T>(f: () => T): T;
 }
@@ -146,11 +207,12 @@ declare module 'EventListener' {
 }
 
 declare function __webpack_chunk_load__(id: string): Promise<mixed>;
+declare function __webpack_get_script_filename__(id: string): string;
 declare const __webpack_require__: ((id: string) => any) & {
   u: string => string,
 };
 
-declare function __turbopack_load__(id: string): Promise<mixed>;
+declare function __turbopack_load_by_url__(id: string): Promise<mixed>;
 declare const __turbopack_require__: ((id: string) => any) & {
   u: string => string,
 };
@@ -356,7 +418,9 @@ declare module 'async_hooks' {
     run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R;
     enterWith(store: T): void;
   }
-  declare interface AsyncResource {}
+  declare class AsyncResource {
+    asyncId(): number;
+  }
   declare function executionAsyncId(): number;
   declare function executionAsyncResource(): AsyncResource;
   declare function triggerAsyncId(): number;
@@ -429,3 +493,127 @@ declare const Bun: {
     input: string | $TypedArray | DataView | ArrayBuffer | SharedArrayBuffer,
   ): number,
 };
+
+// Navigation API
+
+declare const navigation: Navigation;
+
+interface NavigationResult {
+  committed: Promise<NavigationHistoryEntry>;
+  finished: Promise<NavigationHistoryEntry>;
+}
+
+declare class Navigation extends EventTarget {
+  entries(): NavigationHistoryEntry[];
+  +currentEntry: NavigationHistoryEntry | null;
+  updateCurrentEntry(options: NavigationUpdateCurrentEntryOptions): void;
+  +transition: NavigationTransition | null;
+
+  +canGoBack: boolean;
+  +canGoForward: boolean;
+
+  navigate(url: string, options?: NavigationNavigateOptions): NavigationResult;
+  reload(options?: NavigationReloadOptions): NavigationResult;
+
+  traverseTo(key: string, options?: NavigationOptions): NavigationResult;
+  back(options?: NavigationOptions): NavigationResult;
+  forward(options?: NavigationOptions): NavigationResult;
+
+  onnavigate: ((this: Navigation, ev: NavigateEvent) => any) | null;
+  onnavigatesuccess: ((this: Navigation, ev: Event) => any) | null;
+  onnavigateerror: ((this: Navigation, ev: ErrorEvent) => any) | null;
+  oncurrententrychange:
+    | ((this: Navigation, ev: NavigationCurrentEntryChangeEvent) => any)
+    | null;
+
+  // TODO: Implement addEventListener overrides. Doesn't seem like Flow supports this.
+}
+
+declare class NavigationTransition {
+  +navigationType: NavigationTypeString;
+  +from: NavigationHistoryEntry;
+  +finished: Promise<void>;
+}
+
+interface NavigationHistoryEntryEventMap {
+  dispose: Event;
+}
+
+interface NavigationHistoryEntry extends EventTarget {
+  +key: string;
+  +id: string;
+  +url: string | null;
+  +index: number;
+  +sameDocument: boolean;
+
+  getState(): mixed;
+
+  ondispose: ((this: NavigationHistoryEntry, ev: Event) => any) | null;
+
+  // TODO: Implement addEventListener overrides. Doesn't seem like Flow supports this.
+}
+
+declare var NavigationHistoryEntry: {
+  prototype: NavigationHistoryEntry,
+  new(): NavigationHistoryEntry,
+};
+
+type NavigationTypeString = 'reload' | 'push' | 'replace' | 'traverse';
+
+interface NavigationUpdateCurrentEntryOptions {
+  state: mixed;
+}
+
+interface NavigationOptions {
+  info?: mixed;
+}
+
+interface NavigationNavigateOptions extends NavigationOptions {
+  state?: mixed;
+  history?: 'auto' | 'push' | 'replace';
+}
+
+interface NavigationReloadOptions extends NavigationOptions {
+  state?: mixed;
+}
+
+declare class NavigationCurrentEntryChangeEvent extends Event {
+  constructor(type: string, eventInit?: any): void;
+
+  +navigationType: NavigationTypeString | null;
+  +from: NavigationHistoryEntry;
+}
+
+declare class NavigateEvent extends Event {
+  constructor(type: string, eventInit?: any): void;
+
+  +navigationType: NavigationTypeString;
+  +canIntercept: boolean;
+  +userInitiated: boolean;
+  +hashChange: boolean;
+  +hasUAVisualTransition: boolean;
+  +destination: NavigationDestination;
+  +signal: AbortSignal;
+  +formData: FormData | null;
+  +downloadRequest: string | null;
+  +info?: mixed;
+
+  intercept(options?: NavigationInterceptOptions): void;
+  scroll(): void;
+}
+
+interface NavigationInterceptOptions {
+  handler?: () => Promise<void>;
+  focusReset?: 'after-transition' | 'manual';
+  scroll?: 'after-transition' | 'manual';
+}
+
+declare class NavigationDestination {
+  +url: string;
+  +key: string | null;
+  +id: string | null;
+  +index: number;
+  +sameDocument: boolean;
+
+  getState(): mixed;
+}

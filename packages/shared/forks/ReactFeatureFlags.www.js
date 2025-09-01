@@ -16,24 +16,19 @@ const dynamicFeatureFlags: DynamicFeatureFlags = require('ReactFeatureFlags');
 
 export const {
   alwaysThrottleRetries,
-  disableDefaultPropsExceptForClasses,
   disableLegacyContextForFunctionComponents,
   disableSchedulerTimeoutInWorkLoop,
-  enableDO_NOT_USE_disableStrictPassiveEffect,
   enableHiddenSubtreeInsertionEffectCleanup,
   enableInfiniteRenderLoopDetection,
   enableNoCloningMemoCache,
   enableObjectFiber,
-  enableRenderableContext,
   enableRetryLaneExpiration,
   enableTransitionTracing,
   enableTrustedTypesIntegration,
-  favorSafetyOverHydrationPerf,
   renameElementSymbol,
   retryLaneExpirationMs,
   syncLaneExpirationMs,
   transitionLaneExpirationMs,
-  enableFastAddPropertiesInDiffing,
   enableViewTransition,
   enableComponentPerformanceTrack,
   enableScrollEndPolyfill,
@@ -94,8 +89,6 @@ export const disableTextareaChildren = __EXPERIMENTAL__;
 
 export const enableFizzExternalRuntime = true;
 
-export const passChildrenWhenCloningPersistedNodes = false;
-
 export const enablePersistedModeClonedFlag = false;
 
 export const enableAsyncDebugInfo = false;
@@ -105,13 +98,12 @@ export const enableReactTestRendererWarning = false;
 
 export const disableLegacyMode = true;
 
-export const enableShallowPropDiffing = false;
-
-export const enableLazyPublicInstanceInFabric = false;
+export const enableEagerAlternateStateNodeCleanup = true;
 
 export const enableGestureTransition = false;
 
 export const enableSuspenseyImages = false;
+export const enableFizzBlockingRender = true;
 export const enableSrcObject = false;
 export const enableHydrationChangeEvent = false;
 export const enableDefaultTransitionIndicator = false;

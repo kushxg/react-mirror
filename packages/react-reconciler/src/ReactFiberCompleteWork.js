@@ -38,8 +38,6 @@ import {
   enablePersistedModeClonedFlag,
   enableProfilerTimer,
   enableTransitionTracing,
-  enableRenderableContext,
-  passChildrenWhenCloningPersistedNodes,
   disableLegacyMode,
   enableViewTransition,
   enableSuspenseyImages,
@@ -151,7 +149,7 @@ import {
   isContextProvider as isLegacyContextProvider,
   popContext as popLegacyContext,
   popTopLevelContextObject as popTopLevelLegacyContextObject,
-} from './ReactFiberContext';
+} from './ReactFiberLegacyContext';
 import {popProvider} from './ReactFiberNewContext';
 import {
   prepareToHydrateHostInstance,
@@ -184,7 +182,7 @@ import {resetChildFibers} from './ReactChildFiber';
 import {createScopeInstance} from './ReactFiberScope';
 import {transferActualDuration} from './ReactProfilerTimer';
 import {popCacheProvider} from './ReactFiberCacheComponent';
-import {popTreeContext} from './ReactFiberTreeContext';
+import {popTreeContext, pushTreeFork} from './ReactFiberTreeContext';
 import {popRootTransition, popTransition} from './ReactFiberTransition';
 import {
   popMarkerInstance,
@@ -488,7 +486,7 @@ function updateHostComponent(
 
     let newChildSet = null;
     let hasOffscreenComponentChild = false;
-    if (requiresClone && passChildrenWhenCloningPersistedNodes) {
+    if (requiresClone) {
       markCloned(workInProgress);
       newChildSet = createContainerChildSet();
       // If children might have changed, we have to add them all to the set.
@@ -533,10 +531,7 @@ function updateHostComponent(
         // Otherwise parents won't know that there are new children to propagate upwards.
         markUpdate(workInProgress);
       }
-    } else if (
-      !passChildrenWhenCloningPersistedNodes ||
-      hasOffscreenComponentChild
-    ) {
+    } else if (hasOffscreenComponentChild) {
       // If children have changed, we have to add them all to the set.
       appendAllChildren(
         newInstance,
@@ -1667,12 +1662,7 @@ function completeWork(
       return null;
     case ContextProvider:
       // Pop provider fiber
-      let context: ReactContext<any>;
-      if (enableRenderableContext) {
-        context = workInProgress.type;
-      } else {
-        context = workInProgress.type._context;
-      }
+      const context: ReactContext<any> = workInProgress.type;
       popProvider(context, workInProgress);
       bubbleProperties(workInProgress);
       return null;
@@ -1764,6 +1754,10 @@ function completeWork(
                     ForceSuspenseFallback,
                   ),
                 );
+                if (getIsHydrating()) {
+                  // Re-apply tree fork since we popped the tree fork context in the beginning of this function.
+                  pushTreeFork(workInProgress, renderState.treeForkCount);
+                }
                 // Don't bubble properties in this case.
                 return workInProgress.child;
               }
@@ -1890,6 +1884,10 @@ function completeWork(
         }
         pushSuspenseListContext(workInProgress, suspenseContext);
         // Do a pass over the next row.
+        if (getIsHydrating()) {
+          // Re-apply tree fork since we popped the tree fork context in the beginning of this function.
+          pushTreeFork(workInProgress, renderState.treeForkCount);
+        }
         // Don't bubble properties in this case.
         return next;
       }

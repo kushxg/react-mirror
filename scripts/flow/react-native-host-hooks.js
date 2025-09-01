@@ -32,6 +32,7 @@ type __MeasureLayoutOnSuccessCallback = (
 type __ReactNativeBaseComponentViewConfig = any;
 type __ViewConfigGetter = any;
 type __ViewConfig = any;
+type __AttributeConfiguration = any;
 
 // libdefs cannot actually import. This is supposed to be the type imported
 // from 'react-native-renderer/src/legacy-events/TopLevelEventTypes';
@@ -203,6 +204,15 @@ declare module 'react-native/Libraries/ReactPrivate/ReactNativePrivateInterface'
   declare export function getInternalInstanceHandleFromPublicInstance(
     publicInstance: PublicInstance,
   ): ?Object;
+  declare export function createAttributePayload(
+    props: Object,
+    validAttributes: __AttributeConfiguration,
+  ): null | Object;
+  declare export function diffAttributePayloads(
+    prevProps: Object,
+    nextProps: Object,
+    validAttributes: __AttributeConfiguration,
+  ): null | Object;
 }
 
 declare module 'react-native/Libraries/ReactPrivate/ReactNativePrivateInitializeCore' {
@@ -237,13 +247,10 @@ declare const nativeFabricUIManager: {
   cloneNodeWithNewProps: (node: Object, newProps: ?Object) => Object,
   cloneNodeWithNewChildrenAndProps: (
     node: Object,
-    newPropsOrChildren: ?Object | $ReadOnlyArray<Object>,
+    newChildren: $ReadOnlyArray<Object>,
     newProps?: ?Object,
   ) => Object,
   appendChild: (node: Object, childNode: Object) => void,
-
-  createChildSet: () => Object,
-  appendChildToSet: (childSet: Object, childNode: Object) => void,
   completeRoot: (rootTag: number, childSet: Object) => void,
   registerEventHandler: (
     callback: (

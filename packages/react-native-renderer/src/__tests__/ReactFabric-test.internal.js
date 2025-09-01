@@ -184,6 +184,10 @@ describe('ReactFabric', () => {
       nativeFabricUIManager.cloneNodeWithNewChildrenAndProps,
     ).not.toBeCalled();
 
+    jest
+      .spyOn(ReactNativePrivateInterface, 'diffAttributePayloads')
+      .mockReturnValue({bar: 'b'});
+
     await act(() => {
       ReactFabric.render(
         <Text foo="a" bar="b">
@@ -203,6 +207,9 @@ describe('ReactFabric', () => {
  RCTText {"foo":"a","bar":"b"}
    RCTRawText {"text":"1"}`);
 
+    jest
+      .spyOn(ReactNativePrivateInterface, 'diffAttributePayloads')
+      .mockReturnValue({foo: 'b'});
     await act(() => {
       ReactFabric.render(
         <Text foo="b" bar="b">
@@ -213,13 +220,8 @@ describe('ReactFabric', () => {
         true,
       );
     });
-    const argIndex = gate(flags => flags.passChildrenWhenCloningPersistedNodes)
-      ? 2
-      : 1;
     expect(
-      nativeFabricUIManager.cloneNodeWithNewChildrenAndProps.mock.calls[0][
-        argIndex
-      ],
+      nativeFabricUIManager.cloneNodeWithNewChildrenAndProps.mock.calls[0][2],
     ).toEqual({
       foo: 'b',
     });
@@ -261,19 +263,11 @@ describe('ReactFabric', () => {
     expect(
       nativeFabricUIManager.cloneNodeWithNewChildren,
     ).toHaveBeenCalledTimes(1);
-    if (gate(flags => flags.passChildrenWhenCloningPersistedNodes)) {
-      expect(
-        nativeFabricUIManager.cloneNodeWithNewChildren,
-      ).toHaveBeenCalledWith(expect.anything(), [
-        expect.objectContaining({props: {foo: false}}),
-      ]);
-      expect(nativeFabricUIManager.appendChild).not.toBeCalled();
-    } else {
-      expect(
-        nativeFabricUIManager.cloneNodeWithNewChildren,
-      ).toHaveBeenCalledWith(expect.anything());
-      expect(nativeFabricUIManager.appendChild).toHaveBeenCalledTimes(1);
-    }
+    expect(nativeFabricUIManager.cloneNodeWithNewChildren).toHaveBeenCalledWith(
+      expect.anything(),
+      [expect.objectContaining({props: {foo: false}})],
+    );
+    expect(nativeFabricUIManager.appendChild).not.toBeCalled();
     expect(
       nativeFabricUIManager.cloneNodeWithNewChildrenAndProps,
     ).not.toBeCalled();
@@ -612,7 +606,7 @@ describe('ReactFabric', () => {
       ReactFabric.render(<Component chars={before} />, 11, null, true);
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(`11
- RCTView null
+ RCTView {}
    RCTView {"title":"a"}
    RCTView {"title":"b"}
    RCTView {"title":"c"}
@@ -638,7 +632,7 @@ describe('ReactFabric', () => {
       ReactFabric.render(<Component chars={after} />, 11, null, true);
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(`11
- RCTView null
+ RCTView {}
    RCTView {"title":"m"}
    RCTView {"title":"x"}
    RCTView {"title":"h"}
@@ -700,8 +694,8 @@ describe('ReactFabric', () => {
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(
       `11
- RCTView null
-   RCTView null
+ RCTView {}
+   RCTView {}
      RCTView {"title":"a"}
      RCTView {"title":"b"}
      RCTView {"title":"c"}
@@ -732,8 +726,8 @@ describe('ReactFabric', () => {
       });
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(`11
- RCTView null
-   RCTView null
+ RCTView {}
+   RCTView {}
      RCTView {"title":"m"}
      RCTView {"title":"x"}
      RCTView {"title":"h"}
