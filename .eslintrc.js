@@ -379,15 +379,15 @@ module.exports = {
       files: ['**/__tests__/*.js'],
       rules: {
         // https://github.com/jest-community/eslint-plugin-jest
-        // Meh, who cares.
+  // This rule is not enforced in our test code.
         'jest/consistent-test-it': OFF,
-        // Meh, we have a lot of these, who cares.
+  // This rule is not enforced due to frequent occurrences in our codebase.
         'jest/no-alias-methods': OFF,
         // We do conditions based on feature flags.
         'jest/no-conditional-expect': OFF,
         // We have our own assertion helpers.
         'jest/expect-expect': OFF,
-        // Lame rule that fires in itRender helpers or in render methods.
+  // This rule triggers in itRender helpers or in render methods, so it is not enforced.
         'jest/no-standalone-expect': OFF,
       },
     },
@@ -468,13 +468,14 @@ module.exports = {
       files: ['packages/react-server-dom-webpack/**/*.js'],
       globals: {
         __webpack_chunk_load__: 'readonly',
+        __webpack_get_script_filename__: 'readonly',
         __webpack_require__: 'readonly',
       },
     },
     {
       files: ['packages/react-server-dom-turbopack/**/*.js'],
       globals: {
-        __turbopack_load__: 'readonly',
+        __turbopack_load_by_url__: 'readonly',
         __turbopack_require__: 'readonly',
       },
     },
@@ -496,6 +497,7 @@ module.exports = {
         'packages/react-devtools-shared/src/devtools/views/**/*.js',
         'packages/react-devtools-shared/src/hook.js',
         'packages/react-devtools-shared/src/backend/console.js',
+        'packages/react-devtools-shared/src/backend/fiber/renderer.js',
         'packages/react-devtools-shared/src/backend/shared/DevToolsComponentStackFrame.js',
         'packages/react-devtools-shared/src/frontend/utils/withPermissionsCheck.js',
       ],
@@ -504,6 +506,7 @@ module.exports = {
         __IS_FIREFOX__: 'readonly',
         __IS_EDGE__: 'readonly',
         __IS_NATIVE__: 'readonly',
+        __IS_INTERNAL_MCP_BUILD__: 'readonly',
         __IS_INTERNAL_VERSION__: 'readonly',
         chrome: 'readonly',
       },
@@ -544,26 +547,25 @@ module.exports = {
   },
 
   globals: {
-    $Call: 'readonly',
-    $ElementType: 'readonly',
     $Flow$ModuleRef: 'readonly',
     $FlowFixMe: 'readonly',
     $Keys: 'readonly',
     $NonMaybeType: 'readonly',
-    $PropertyType: 'readonly',
     $ReadOnly: 'readonly',
     $ReadOnlyArray: 'readonly',
     $ArrayBufferView: 'readonly',
     $Shape: 'readonly',
     CallSite: 'readonly',
-    ConsoleTask: 'readonly', // TOOD: Figure out what the official name of this will be.
+  ConsoleTask: 'readonly', // TODO: Figure out what the official name of this will be.
     ReturnType: 'readonly',
     AnimationFrameID: 'readonly',
+    WeakRef: 'readonly',
     // For Flow type annotation. Only `BigInt` is valid at runtime.
     bigint: 'readonly',
     BigInt: 'readonly',
     BigInt64Array: 'readonly',
     BigUint64Array: 'readonly',
+    CacheType: 'readonly',
     Class: 'readonly',
     ClientRect: 'readonly',
     CopyInspectedElementPath: 'readonly',
@@ -578,12 +580,15 @@ module.exports = {
     IteratorResult: 'readonly',
     JSONValue: 'readonly',
     JSResourceReference: 'readonly',
+    mixin$Animatable: 'readonly',
     MouseEventHandler: 'readonly',
+    NavigateEvent: 'readonly',
+    PerformanceMeasureOptions: 'readonly',
     PropagationPhases: 'readonly',
     PropertyDescriptor: 'readonly',
-    React$AbstractComponent: 'readonly',
+    PropertyDescriptorMap: 'readonly',
+    Proxy$traps: 'readonly',
     React$Component: 'readonly',
-    React$ComponentType: 'readonly',
     React$Config: 'readonly',
     React$Context: 'readonly',
     React$Element: 'readonly',
@@ -604,19 +609,21 @@ module.exports = {
     symbol: 'readonly',
     SyntheticEvent: 'readonly',
     SyntheticMouseEvent: 'readonly',
+    SyntheticPointerEvent: 'readonly',
     Thenable: 'readonly',
     TimeoutID: 'readonly',
     WheelEventHandler: 'readonly',
     FinalizationRegistry: 'readonly',
+    Exclude: 'readonly',
     Omit: 'readonly',
     Keyframe: 'readonly',
     PropertyIndexedKeyframes: 'readonly',
     KeyframeAnimationOptions: 'readonly',
     GetAnimationsOptions: 'readonly',
-    Animatable: 'readonly',
     ScrollTimeline: 'readonly',
     EventListenerOptionsOrUseCapture: 'readonly',
     FocusOptions: 'readonly',
+    OptionalEffectTiming: 'readonly',
 
     spyOnDev: 'readonly',
     spyOnDevAndProd: 'readonly',
@@ -634,5 +641,6 @@ module.exports = {
     AsyncLocalStorage: 'readonly',
     async_hooks: 'readonly',
     globalThis: 'readonly',
+    navigation: 'readonly',
   },
 };
