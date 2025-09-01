@@ -16,10 +16,17 @@ function ComponentWithHookInsideCallback() {
 ## Error
 
 ```
+Found 1 error:
+
+Error: Cannot call hooks within function expressions
+
+Hooks must be called at the top level in the body of a function component or custom hook, and may not be called within function expressions. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning)
+
+error.invalid.invalid-rules-of-hooks-d952b82c2597.ts:5:4
   3 | function ComponentWithHookInsideCallback() {
   4 |   useEffect(() => {
 > 5 |     useHookInsideCallback();
-    |     ^^^^^^^^^^^^^^^^^^^^^ InvalidReact: Hooks must be called at the top level in the body of a function component or custom hook, and may not be called within function expressions. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning). Cannot call Custom within a function component (5:5)
+    |     ^^^^^^^^^^^^^^^^^^^^^ Cannot call hook within a function expression
   6 |   });
   7 | }
   8 |

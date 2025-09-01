@@ -16,15 +16,33 @@ function Component(props) {
 ## Error
 
 ```
+Found 2 errors:
+
+Error: Cannot call hooks conditionally
+
+Hooks must always be called in a consistent order, and may not be called conditionally. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning)
+
+error.invalid-hook-for.ts:4:9
   2 |   let i = 0;
   3 |   for (let x = 0; useHook(x) < 10; useHook(i), x++) {
 > 4 |     i += useHook(x);
-    |          ^^^^^^^ InvalidReact: Hooks must always be called in a consistent order, and may not be called conditionally. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning) (4:4)
-
-InvalidReact: Hooks must always be called in a consistent order, and may not be called conditionally. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning) (3:3)
+    |          ^^^^^^^ Cannot call hook conditionally
   5 |   }
   6 |   return i;
   7 | }
+
+Error: Cannot call hooks conditionally
+
+Hooks must always be called in a consistent order, and may not be called conditionally. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning)
+
+error.invalid-hook-for.ts:3:35
+  1 | function Component(props) {
+  2 |   let i = 0;
+> 3 |   for (let x = 0; useHook(x) < 10; useHook(i), x++) {
+    |                                    ^^^^^^^ Cannot call hook conditionally
+  4 |     i += useHook(x);
+  5 |   }
+  6 |   return i;
 ```
           
       
