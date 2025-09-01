@@ -11,6 +11,7 @@ import type {
   ReactContext,
   StartTransitionOptions,
   Usable,
+  UseOptions,
   Thenable,
   RejectedThenable,
   Awaited,
@@ -55,7 +56,6 @@ import {
   ConcurrentMode,
   StrictEffectsMode,
   StrictLegacyMode,
-  NoStrictPassiveEffectsMode,
 } from './ReactTypeOfMode';
 import {
   NoLane,
@@ -123,7 +123,10 @@ import {
   markStateUpdateScheduled,
   setIsStrictModeForDevtools,
 } from './ReactFiberDevToolsHook';
-import {startUpdateTimerByLane} from './ReactProfilerTimer';
+import {
+  startUpdateTimerByLane,
+  startHostActionTimer,
+} from './ReactProfilerTimer';
 import {createCache} from './ReactFiberCacheComponent';
 import {
   createUpdate as createLegacyQueueUpdate,
@@ -1145,12 +1148,33 @@ function useThenable<T>(thenable: Thenable<T>): T {
   return result;
 }
 
-function use<T>(usable: Usable<T>): T {
+function use<T>(usable: Usable<T>, options?: UseOptions): T {
   if (usable !== null && typeof usable === 'object') {
     // $FlowFixMe[method-unbinding]
     if (typeof usable.then === 'function') {
       // This is a thenable.
       const thenable: Thenable<T> = (usable: any);
+
+      // Check if client fallback is disabled
+      if (options && options.allowClientFallback === false) {
+        // Check if we're in a client environment and this thenable
+        // represents a server action that failed to execute on server
+        // For now, we implement a basic check - in a full implementation,
+        // this would involve deeper integration with server action metadata
+        if (typeof window !== 'undefined') {
+          // We're on the client side
+          // In the future, this could check thenable metadata to determine
+          // if it's a server action that should not fall back to client
+          const isServerAction = (thenable: any)._serverAction === true;
+          if (isServerAction) {
+            throw new Error(
+              'Server action execution failed and client fallback is disabled. ' +
+                'This action can only be executed on the server.',
+            );
+          }
+        }
+      }
+
       return useThenable(thenable);
     } else if (usable.$$typeof === REACT_CONTEXT_TYPE) {
       const context: ReactContext<T> = (usable: any);
@@ -1206,7 +1230,7 @@ function useMemoCache(size: number): Array<mixed> {
               ? currentMemoCache.data
               : // Clone the memo cache before each render (copy-on-write)
                 currentMemoCache.data.map(array => array.slice()),
-            index: 0,
+            index: 0 as number,
           };
         }
       }
@@ -1216,7 +1240,7 @@ function useMemoCache(size: number): Array<mixed> {
   if (memoCache == null) {
     memoCache = {
       data: [],
-      index: 0,
+      index: 0 as number,
     };
   }
   if (updateQueue === null) {
@@ -2672,8 +2696,7 @@ function mountEffect(
 ): void {
   if (
     __DEV__ &&
-    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode &&
-    (currentlyRenderingFiber.mode & NoStrictPassiveEffectsMode) === NoMode
+    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode
   ) {
     mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
@@ -3241,6 +3264,8 @@ export function startHostTransition<F>(
     BasicStateAction<Thenable<TransitionStatus> | TransitionStatus>,
   > = stateHook.queue;
 
+  startHostActionTimer(formFiber);
+
   startTransition(
     formFiber,
     queue,
@@ -3446,7 +3471,7 @@ function mountId(): string {
     const treeId = getTreeId();
 
     // Use a captial R prefix for server-generated ids.
-    id = '\u00AB' + identifierPrefix + 'R' + treeId;
+    id = '_' + identifierPrefix + 'R_' + treeId;
 
     // Unless this is the first id at this level, append a number at the end
     // that represents the position of this useId hook among all the useId
@@ -3456,16 +3481,11 @@ function mountId(): string {
       id += 'H' + localId.toString(32);
     }
 
-    id += '\u00BB';
+    id += '_';
   } else {
     // Use a lowercase r prefix for client-generated ids.
     const globalClientId = globalClientIdCounter++;
-    id =
-      '\u00AB' +
-      identifierPrefix +
-      'r' +
-      globalClientId.toString(32) +
-      '\u00BB';
+    id = '_' + identifierPrefix + 'r_' + globalClientId.toString(32) + '_';
   }
 
   hook.memoizedState = id;
@@ -4675,9 +4695,9 @@ if (__DEV__) {
       warnInvalidContextAccess();
       return readContext(context);
     },
-    use<T>(usable: Usable<T>): T {
+    use<T>(usable: Usable<T>, options?: UseOptions): T {
       warnInvalidHookAccess();
-      return use(usable);
+      return use(usable, options);
     },
     useCallback<T>(callback: T, deps: Array<mixed> | void | null): T {
       currentHookNameInDev = 'useCallback';
@@ -4867,9 +4887,9 @@ if (__DEV__) {
       warnInvalidContextAccess();
       return readContext(context);
     },
-    use<T>(usable: Usable<T>): T {
+    use<T>(usable: Usable<T>, options?: UseOptions): T {
       warnInvalidHookAccess();
-      return use(usable);
+      return use(usable, options);
     },
     useCallback<T>(callback: T, deps: Array<mixed> | void | null): T {
       currentHookNameInDev = 'useCallback';
@@ -5059,9 +5079,9 @@ if (__DEV__) {
       warnInvalidContextAccess();
       return readContext(context);
     },
-    use<T>(usable: Usable<T>): T {
+    use<T>(usable: Usable<T>, options?: UseOptions): T {
       warnInvalidHookAccess();
-      return use(usable);
+      return use(usable, options);
     },
     useCallback<T>(callback: T, deps: Array<mixed> | void | null): T {
       currentHookNameInDev = 'useCallback';

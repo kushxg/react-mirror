@@ -13,6 +13,7 @@ import type {
   StartTransitionOptions,
   Wakeable,
   Usable,
+  UseOptions,
   ReactFormState,
   Awaited,
   ReactComponentInfo,
@@ -200,7 +201,7 @@ export type Fiber = {
 
   _debugInfo?: ReactDebugInfo | null,
   _debugOwner?: ReactComponentInfo | Fiber | null,
-  _debugStack?: string | Error | null,
+  _debugStack?: Error | null,
   _debugTask?: ConsoleTask | null,
   _debugNeedsRemount?: boolean,
 
@@ -248,6 +249,7 @@ type BaseFiberRootProperties = {
   pingedLanes: Lanes,
   warmLanes: Lanes,
   expiredLanes: Lanes,
+  indicatorLanes: Lanes, // enableDefaultTransitionIndicator only
   errorRecoveryDisabledLanes: Lanes,
   shellSuspendCounter: number,
 
@@ -272,7 +274,7 @@ type BaseFiberRootProperties = {
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
@@ -280,7 +282,9 @@ type BaseFiberRootProperties = {
     errorInfo: {+componentStack?: ?string},
   ) => void,
 
+  // enableDefaultTransitionIndicator only
   onDefaultTransitionIndicator: () => void | (() => void),
+  pendingIndicator: null | (() => void),
 
   formState: ReactFormState<any, any> | null,
 
@@ -392,7 +396,7 @@ type BasicStateAction<S> = (S => S) | S;
 type Dispatch<A> = A => void;
 
 export type Dispatcher = {
-  use: <T>(Usable<T>) => T,
+  use: <T>(Usable<T>, options?: UseOptions) => T,
   readContext<T>(context: ReactContext<T>): T,
   useState<S>(initialState: (() => S) | S): [S, Dispatch<BasicStateAction<S>>],
   useReducer<S, I, A>(
@@ -456,6 +460,7 @@ export type Dispatcher = {
 
 export type AsyncDispatcher = {
   getCacheForType: <T>(resourceType: () => T) => T,
+  cacheSignal: () => null | AbortSignal,
   // DEV-only
   getOwner: () => null | Fiber | ReactComponentInfo | ComponentStackNode,
 };
