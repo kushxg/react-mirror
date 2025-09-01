@@ -66,7 +66,7 @@ import {
  *    those dependencies.
  * - The output of A is the input to B. Any invalidation of A will change its output
  *    which invalidates B, so we can similarly merge scopes. Note that this optimization
- *    may not be beneficial if the outupts of A are not guaranteed to change if its input
+ *    may not be beneficial if the outputs of A are not guaranteed to change if its input
  *    changes, but in practice this is generally the case.
  *
  * ## Nested Scopes
@@ -77,9 +77,9 @@ import {
  * Note that PropagateScopeDependencies propagates scope dependencies upwards. This ensures
  * that parent scopes have the union of their own direct dependencies as well as those of
  * their (transitive) children. As a result nested scopes may have the same or fewer
- * dependencies than their parents, but not more dependencies. If they have fewer dependncies,
+ * dependencies than their parents, but not more dependencies. If they have fewer dependencies,
  * it means that the inner scope does not always invalidate with the parent and we should not
- * flatten. If they inner scope has the exact same dependencies, however, then it's always
+ * flatten. If the inner scope has the exact same dependencies, however, then it's always
  * better to flatten.
  */
 export function mergeReactiveScopesThatInvalidateTogether(
@@ -119,6 +119,7 @@ class FindLastUsageVisitor extends ReactiveFunctionVisitor<void> {
 
 class Transform extends ReactiveFunctionTransform<ReactiveScopeDependencies | null> {
   lastUsage: Map<DeclarationId, InstructionId>;
+  temporaries: Map<DeclarationId, DeclarationId> = new Map();
 
   constructor(lastUsage: Map<DeclarationId, InstructionId>) {
     super();
@@ -215,6 +216,12 @@ class Transform extends ReactiveFunctionTransform<ReactiveScopeDependencies | nu
                 current.lvalues.add(
                   instr.instruction.lvalue.identifier.declarationId,
                 );
+                if (instr.instruction.value.kind === 'LoadLocal') {
+                  this.temporaries.set(
+                    instr.instruction.lvalue.identifier.declarationId,
+                    instr.instruction.value.place.identifier.declarationId,
+                  );
+                }
               }
               break;
             }
@@ -236,6 +243,13 @@ class Transform extends ReactiveFunctionTransform<ReactiveScopeDependencies | nu
                   )) {
                     current.lvalues.add(lvalue.identifier.declarationId);
                   }
+                  this.temporaries.set(
+                    instr.instruction.value.lvalue.place.identifier
+                      .declarationId,
+                    this.temporaries.get(
+                      instr.instruction.value.value.identifier.declarationId,
+                    ) ?? instr.instruction.value.value.identifier.declarationId,
+                  );
                 } else {
                   log(
                     `Reset scope @${current.block.scope.id} from StoreLocal in [${instr.instruction.id}]`,
@@ -260,7 +274,7 @@ class Transform extends ReactiveFunctionTransform<ReactiveScopeDependencies | nu
         case 'scope': {
           if (
             current !== null &&
-            canMergeScopes(current.block, instr) &&
+            canMergeScopes(current.block, instr, this.temporaries) &&
             areLValuesLastUsedByScope(
               instr.scope,
               current.lvalues,
@@ -297,7 +311,7 @@ class Transform extends ReactiveFunctionTransform<ReactiveScopeDependencies | nu
                * inputs change, so it is not a candidate for future merging
                */
               log(
-                `  but scope @${instr.scope.id} doesnt guaranteed invalidate so it cannot merge further`,
+                `  but scope @${instr.scope.id} doesn\'t guaranteed invalidate so it cannot merge further`,
               );
               reset();
             }
@@ -320,7 +334,7 @@ class Transform extends ReactiveFunctionTransform<ReactiveScopeDependencies | nu
               };
             } else {
               log(
-                `scope @${instr.scope.id} doesnt guaranteed invalidate so it cannot merge further`,
+                `scope @${instr.scope.id} doesn\'t guaranteed invalidate so it cannot merge further`,
               );
             }
           }
@@ -426,6 +440,7 @@ function areLValuesLastUsedByScope(
 function canMergeScopes(
   current: ReactiveScopeBlock,
   next: ReactiveScopeBlock,
+  temporaries: Map<DeclarationId, DeclarationId>,
 ): boolean {
   // Don't merge scopes with reassignments
   if (
@@ -456,6 +471,7 @@ function canMergeScopes(
       new Set(
         [...current.scope.declarations.values()].map(declaration => ({
           identifier: declaration.identifier,
+          reactive: true,
           path: [],
         })),
       ),
@@ -464,11 +480,14 @@ function canMergeScopes(
     (next.scope.dependencies.size !== 0 &&
       [...next.scope.dependencies].every(
         dep =>
+          dep.path.length === 0 &&
           isAlwaysInvalidatingType(dep.identifier.type) &&
           Iterable_some(
             current.scope.declarations.values(),
             decl =>
-              decl.identifier.declarationId === dep.identifier.declarationId,
+              decl.identifier.declarationId === dep.identifier.declarationId ||
+              decl.identifier.declarationId ===
+                temporaries.get(dep.identifier.declarationId),
           ),
       ))
   ) {
@@ -476,12 +495,16 @@ function canMergeScopes(
     return true;
   }
   log(`  cannot merge scopes:`);
-  log(`  ${printReactiveScopeSummary(current.scope)}`);
-  log(`  ${printReactiveScopeSummary(next.scope)}`);
+  log(
+    `  ${printReactiveScopeSummary(current.scope)} ${[...current.scope.declarations.values()].map(decl => decl.identifier.declarationId)}`,
+  );
+  log(
+    `  ${printReactiveScopeSummary(next.scope)} ${[...next.scope.dependencies].map(dep => `${dep.identifier.declarationId} ${temporaries.get(dep.identifier.declarationId) ?? dep.identifier.declarationId}`)}`,
+  );
   return false;
 }
 
-function isAlwaysInvalidatingType(type: Type): boolean {
+export function isAlwaysInvalidatingType(type: Type): boolean {
   switch (type.kind) {
     case 'Object': {
       switch (type.shapeId) {

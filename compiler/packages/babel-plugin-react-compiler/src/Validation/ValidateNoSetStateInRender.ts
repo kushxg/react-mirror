@@ -5,7 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import {CompilerError, ErrorSeverity} from '../CompilerError';
+import {
+  CompilerDiagnostic,
+  CompilerError,
+  ErrorCategory,
+  ErrorSeverity,
+} from '../CompilerError';
 import {HIRFunction, IdentifierId, isSetStateType} from '../HIR';
 import {computeUnconditionalBlocks} from '../HIR/ComputeUnconditionalBlocks';
 import {eachInstructionValueOperand} from '../HIR/visitors';
@@ -84,7 +89,7 @@ function validateNoSetStateInRenderImpl(
                 isSetStateType(operand.identifier) ||
                 unconditionalSetStateFunctions.has(operand.identifier.id),
             ) &&
-            // if yes, does it unconditonally call it?
+            // if yes, does it unconditionally call it?
             validateNoSetStateInRenderImpl(
               instr.value.loweredFunc.func,
               unconditionalSetStateFunctions,
@@ -122,23 +127,37 @@ function validateNoSetStateInRenderImpl(
             unconditionalSetStateFunctions.has(callee.identifier.id)
           ) {
             if (activeManualMemoId !== null) {
-              errors.push({
-                reason:
-                  'Calling setState from useMemo may trigger an infinite loop. (https://react.dev/reference/react/useState)',
-                description: null,
-                severity: ErrorSeverity.InvalidReact,
-                loc: callee.loc,
-                suggestions: null,
-              });
+              errors.pushDiagnostic(
+                CompilerDiagnostic.create({
+                  category: ErrorCategory.RenderSetState,
+                  reason:
+                    'Calling setState from useMemo may trigger an infinite loop',
+                  description:
+                    'Each time the memo callback is evaluated it will change state. This can cause a memoization dependency to change, running the memo function again and causing an infinite loop. Instead of setting state in useMemo(), prefer deriving the value during render. (https://react.dev/reference/react/useState)',
+                  severity: ErrorSeverity.InvalidReact,
+                  suggestions: null,
+                }).withDetail({
+                  kind: 'error',
+                  loc: callee.loc,
+                  message: 'Found setState() within useMemo()',
+                }),
+              );
             } else if (unconditionalBlocks.has(block.id)) {
-              errors.push({
-                reason:
-                  'This is an unconditional set state during render, which will trigger an infinite loop. (https://react.dev/reference/react/useState)',
-                description: null,
-                severity: ErrorSeverity.InvalidReact,
-                loc: callee.loc,
-                suggestions: null,
-              });
+              errors.pushDiagnostic(
+                CompilerDiagnostic.create({
+                  category: ErrorCategory.RenderSetState,
+                  reason:
+                    'Calling setState during render may trigger an infinite loop',
+                  description:
+                    'Calling setState during render will trigger another render, and can lead to infinite loops. (https://react.dev/reference/react/useState)',
+                  severity: ErrorSeverity.InvalidReact,
+                  suggestions: null,
+                }).withDetail({
+                  kind: 'error',
+                  loc: callee.loc,
+                  message: 'Found setState() in render',
+                }),
+              );
             }
           }
           break;

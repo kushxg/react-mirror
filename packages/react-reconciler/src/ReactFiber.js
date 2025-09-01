@@ -24,7 +24,6 @@ import type {ActivityInstance, SuspenseInstance} from './ReactFiberConfig';
 import type {
   LegacyHiddenProps,
   OffscreenProps,
-  OffscreenInstance,
 } from './ReactFiberOffscreenComponent';
 import type {ViewTransitionState} from './ReactFiberViewTransitionComponent';
 import type {TracingMarkerInstance} from './ReactFiberTracingMarkerComponent';
@@ -40,8 +39,6 @@ import {
   enableScopeAPI,
   enableLegacyHidden,
   enableTransitionTracing,
-  enableDO_NOT_USE_disableStrictPassiveEffect,
-  enableRenderableContext,
   disableLegacyMode,
   enableObjectFiber,
   enableViewTransition,
@@ -78,7 +75,6 @@ import {
   ViewTransitionComponent,
   ActivityComponent,
 } from './ReactWorkTags';
-import {OffscreenVisible} from './ReactFiberOffscreenComponent';
 import {getComponentNameFromOwner} from 'react-reconciler/src/getComponentNameFromFiber';
 import {isDevToolsPresent} from './ReactFiberDevToolsHook';
 import {
@@ -93,7 +89,6 @@ import {
   ProfileMode,
   StrictLegacyMode,
   StrictEffectsMode,
-  NoStrictPassiveEffectsMode,
   SuspenseyImagesMode,
 } from './ReactTypeOfMode';
 import {
@@ -101,7 +96,6 @@ import {
   REACT_FRAGMENT_TYPE,
   REACT_STRICT_MODE_TYPE,
   REACT_PROFILER_TYPE,
-  REACT_PROVIDER_TYPE,
   REACT_CONTEXT_TYPE,
   REACT_CONSUMER_TYPE,
   REACT_SUSPENSE_TYPE,
@@ -334,7 +328,7 @@ export function createWorkInProgress(current: Fiber, pendingProps: any): Fiber {
     // We use a double buffering pooling technique because we know that we'll
     // only ever need at most two versions of a tree. We pool the "other" unused
     // node that we're free to reuse. This is lazily created to avoid allocating
-    // extra objects for things that are never updated. It also allow us to
+    // extra objects for things that are never updated. It also allows us to
     // reclaim the extra memory if needed.
     workInProgress = createFiber(
       current.tag,
@@ -528,7 +522,7 @@ export function createHostRootFiber(
   tag: RootTag,
   isStrictMode: boolean,
 ): Fiber {
-  let mode;
+  let mode: number;
   if (disableLegacyMode || tag === ConcurrentRoot) {
     mode = ConcurrentMode;
     if (isStrictMode === true) {
@@ -557,7 +551,7 @@ export function createFiberFromTypeAndProps(
   mode: TypeOfMode,
   lanes: Lanes,
 ): Fiber {
-  let fiberTag = FunctionComponent;
+  let fiberTag: WorkTag = FunctionComponent;
   // The resolved type is set if we know what the final type will be. I.e. it's not lazy.
   let resolvedType = type;
   if (typeof type === 'function') {
@@ -601,12 +595,6 @@ export function createFiberFromTypeAndProps(
         if (disableLegacyMode || (mode & ConcurrentMode) !== NoMode) {
           // Strict effects should never run on legacy roots
           mode |= StrictEffectsMode;
-          if (
-            enableDO_NOT_USE_disableStrictPassiveEffect &&
-            pendingProps.DO_NOT_USE_disableStrictPassiveEffect
-          ) {
-            mode |= NoStrictPassiveEffectsMode;
-          }
         }
         break;
       case REACT_PROFILER_TYPE:
@@ -638,25 +626,12 @@ export function createFiberFromTypeAndProps(
       default: {
         if (typeof type === 'object' && type !== null) {
           switch (type.$$typeof) {
-            case REACT_PROVIDER_TYPE:
-              if (!enableRenderableContext) {
-                fiberTag = ContextProvider;
-                break getTag;
-              }
-            // Fall through
             case REACT_CONTEXT_TYPE:
-              if (enableRenderableContext) {
-                fiberTag = ContextProvider;
-                break getTag;
-              } else {
-                fiberTag = ContextConsumer;
-                break getTag;
-              }
+              fiberTag = ContextProvider;
+              break getTag;
             case REACT_CONSUMER_TYPE:
-              if (enableRenderableContext) {
-                fiberTag = ContextConsumer;
-                break getTag;
-              }
+              fiberTag = ContextConsumer;
+              break getTag;
             // Fall through
             case REACT_FORWARD_REF_TYPE:
               fiberTag = ForwardRef;
@@ -854,13 +829,6 @@ export function createFiberFromOffscreen(
 ): Fiber {
   const fiber = createFiber(OffscreenComponent, pendingProps, key, mode);
   fiber.lanes = lanes;
-  const primaryChildInstance: OffscreenInstance = {
-    _visibility: OffscreenVisible,
-    _pendingMarkers: null,
-    _retryCache: null,
-    _transitions: null,
-  };
-  fiber.stateNode = primaryChildInstance;
   return fiber;
 }
 export function createFiberFromActivity(
@@ -908,15 +876,6 @@ export function createFiberFromLegacyHidden(
   const fiber = createFiber(LegacyHiddenComponent, pendingProps, key, mode);
   fiber.elementType = REACT_LEGACY_HIDDEN_TYPE;
   fiber.lanes = lanes;
-  // Adding a stateNode for legacy hidden because it's currently using
-  // the offscreen implementation, which depends on a state node
-  const instance: OffscreenInstance = {
-    _visibility: OffscreenVisible,
-    _pendingMarkers: null,
-    _transitions: null,
-    _retryCache: null,
-  };
-  fiber.stateNode = instance;
   return fiber;
 }
 

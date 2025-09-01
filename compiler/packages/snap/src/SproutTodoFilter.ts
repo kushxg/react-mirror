@@ -460,6 +460,7 @@ const skipFilter = new Set([
   'fbt/bug-fbt-plural-multiple-function-calls',
   'fbt/bug-fbt-plural-multiple-mixed-call-tag',
   'bug-invalid-phi-as-dependency',
+  'bug-ref-prefix-postfix-operator',
 
   // 'react-compiler-runtime' not yet supported
   'flag-enable-emit-hook-guards',
@@ -484,7 +485,8 @@ const skipFilter = new Set([
   'todo.lower-context-access-destructure-multiple',
   'todo.lower-context-access-array-destructuring',
   'lower-context-selector-simple',
-  'lower-context-acess-multiple',
+  'lower-context-access-multiple',
+  'bug-separate-memoization-due-to-callback-capturing',
 ]);
 
 export default skipFilter;

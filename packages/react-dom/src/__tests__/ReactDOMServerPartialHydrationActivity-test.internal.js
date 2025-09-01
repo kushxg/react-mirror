@@ -1352,8 +1352,8 @@ describe('ReactDOMServerPartialHydrationActivity', () => {
     }
 
     function Sibling() {
-      const [visible, setVisibilty] = React.useState(false);
-      showSibling = () => setVisibilty(true);
+      const [visible, setVisibility] = React.useState(false);
+      showSibling = () => setVisibility(true);
       if (visible) {
         return <div>First</div>;
       }
@@ -1415,8 +1415,8 @@ describe('ReactDOMServerPartialHydrationActivity', () => {
     }
 
     function App() {
-      const [visible, setVisibilty] = React.useState(true);
-      hideMiddle = () => setVisibilty(false);
+      const [visible, setVisibility] = React.useState(true);
+      hideMiddle = () => setVisibility(false);
 
       return (
         <div>
@@ -1883,7 +1883,7 @@ describe('ReactDOMServerPartialHydrationActivity', () => {
       assertConsoleErrorDev([
         "Can't perform a React state update on a component that hasn't mounted yet. " +
           'This indicates that you have a side-effect in your render function that ' +
-          'asynchronously later calls tries to update the component. Move this work to useEffect instead.\n' +
+          'asynchronously tries to update the component. Move this work to useEffect instead.\n' +
           '    in App (at **)',
       ]);
 

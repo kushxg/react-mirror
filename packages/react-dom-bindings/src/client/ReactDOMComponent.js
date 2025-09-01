@@ -72,6 +72,7 @@ import {
   enableScrollEndPolyfill,
   enableSrcObject,
   enableTrustedTypesIntegration,
+  enableViewTransition,
 } from 'shared/ReactFeatureFlags';
 import {
   mediaEventTypes,
@@ -2349,7 +2350,7 @@ function hydrateSrcObjectAttribute(
     if (typeof size === 'number' && typeof type === 'string') {
       if (serverValue.indexOf('data:' + type + ';base64,') === 0) {
         // For Blobs we don't bother reading the actual data but just diff by checking if
-        // the byte length size of the Blob maches the length of the data url.
+        // the byte length size of the Blob matches the length of the data url.
         const prefixLength = 5 + type.length + 8;
         let byteLength = ((serverValue.length - prefixLength) / 4) * 3;
         if (serverValue[serverValue.length - 1] === '=') {
@@ -3217,6 +3218,18 @@ export function diffHydratedProperties(
           break;
         case 'selected':
           break;
+        case 'vt-name':
+        case 'vt-update':
+        case 'vt-enter':
+        case 'vt-exit':
+        case 'vt-share':
+          if (enableViewTransition) {
+            // View Transition annotations are expected from the Server Runtime.
+            // However, if they're also specified on the client and don't match
+            // that's an error.
+            break;
+          }
+        // Fallthrough
         default:
           // Intentionally use the original name.
           // See discussion in https://github.com/facebook/react/pull/10676.

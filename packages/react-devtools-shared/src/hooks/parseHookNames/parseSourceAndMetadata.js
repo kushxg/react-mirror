@@ -15,7 +15,7 @@ import LRU from 'lru-cache';
 import {getHookName} from '../astUtils';
 import {areSourceMapsAppliedToErrors} from '../ErrorTester';
 import {__DEBUG__} from 'react-devtools-shared/src/constants';
-import {getHookSourceLocationKey} from 'react-devtools-shared/src/hookNamesCache';
+import {getHookSourceLocationKey} from 'react-devtools-shared/src/hookSourceLocation';
 import {SourceMapMetadataConsumer} from '../SourceMapMetadataConsumer';
 import {
   withAsyncPerfMeasurements,
@@ -347,7 +347,7 @@ function parseSourceAST(
             originalSourceCode.indexOf('@flow') > 0 ? 'flow' : 'typescript';
 
           // TODO (named hooks) This is probably where we should check max source length,
-          // rather than in loadSourceAndMetatada -> loadSourceFiles().
+          // rather than in loadSourceAndMetadata -> loadSourceFiles().
           // TODO(#22319): Support source files that are html files with inline script tags.
           const originalSourceAST = withSyncPerfMeasurements(
             '[@babel/parser] parse(originalSourceCode)',

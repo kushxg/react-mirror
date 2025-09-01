@@ -34,7 +34,7 @@ const DEVTOOLS_VERSION = getVersionString();
 
 // If the React version isn't set, we will use the
 // current React version instead. Likewise if the
-// React version isnt' set, we'll use the build folder
+// React version isn't set, we'll use the build folder
 // for both React DevTools and React
 const REACT_VERSION = process.env.REACT_VERSION
   ? semver.coerce(process.env.REACT_VERSION).version
@@ -47,7 +47,31 @@ const E2E_APP_BUILD_DIR = process.env.REACT_VERSION
 const makeConfig = (entry, alias) => ({
   mode: __DEV__ ? 'development' : 'production',
   devtool: __DEV__ ? 'cheap-source-map' : 'source-map',
-  stats: 'normal',
+  stats: {
+    preset: 'normal',
+    warningsFilter: [
+      warning => {
+        const message = warning.message;
+        // We use ReactDOM legacy APIs conditionally based on the React version.
+        // react-native-web also accesses legacy APIs statically but we don't end
+        // up using them at runtime.
+        return (
+          message.startsWith(
+            `export 'findDOMNode' (imported as 'findDOMNode') was not found in 'react-dom'`,
+          ) ||
+          message.startsWith(
+            `export 'hydrate' (reexported as 'hydrate') was not found in 'react-dom'`,
+          ) ||
+          message.startsWith(
+            `export 'render' (imported as 'render') was not found in 'react-dom'`,
+          ) ||
+          message.startsWith(
+            `export 'unmountComponentAtNode' (imported as 'unmountComponentAtNode') was not found in 'react-dom'`,
+          )
+        );
+      },
+    ],
+  },
   entry,
   output: {
     publicPath: '/dist/',

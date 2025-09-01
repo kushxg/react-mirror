@@ -150,7 +150,7 @@ describe('ReactSuspenseWithNoopRenderer', () => {
     if (caches.length === 0) {
       throw Error('Cache does not exist.');
     } else {
-      // Resolve the most recently created cache. An older cache can by
+      // Resolve the most recently created cache. An older cache can be
       // resolved with `caches[index].resolve(text)`.
       caches[caches.length - 1].resolve(text);
     }
@@ -162,7 +162,7 @@ describe('ReactSuspenseWithNoopRenderer', () => {
     if (caches.length === 0) {
       throw Error('Cache does not exist.');
     } else {
-      // Resolve the most recently created cache. An older cache can by
+      // Resolve the most recently created cache. An older cache can be
       // resolved with `caches[index].reject(text, error)`.
       caches[caches.length - 1].reject(text, error);
     }
@@ -595,7 +595,7 @@ describe('ReactSuspenseWithNoopRenderer', () => {
     );
 
     // Unblock the low-pri text and finish. Nothing in the UI changes because
-    // the update was overriden
+    // the update was overridden
     await act(() => resolveText('2'));
     assertLog(['2']);
     expect(ReactNoop).toMatchRenderedOutput(
@@ -4140,5 +4140,29 @@ describe('ReactSuspenseWithNoopRenderer', () => {
         <span prop="C" />
       </>,
     );
+  });
+
+  it('can rerender after resolving a promise', async () => {
+    const promise = Promise.resolve(null);
+    const root = ReactNoop.createRoot();
+
+    await act(() => {
+      startTransition(() => {
+        root.render(<Suspense>{promise}</Suspense>);
+      });
+    });
+
+    assertLog([]);
+    expect(root).toMatchRenderedOutput(null);
+
+    await act(() => {
+      startTransition(() => {
+        root.render(
+          <Suspense>
+            <div />
+          </Suspense>,
+        );
+      });
+    });
   });
 });

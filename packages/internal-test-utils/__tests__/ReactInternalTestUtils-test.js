@@ -382,7 +382,7 @@ describe('ReactInternalTestUtils console assertions', () => {
       });
 
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.log was called without assertConsoleLogDev:
         + A
@@ -701,7 +701,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitFor(['foo', 'bar']);
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.log was called without assertConsoleLogDev:
         + Not asserted
@@ -743,7 +743,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitForThrow('Oh no!');
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.log was called without assertConsoleLogDev:
         + Not asserted
@@ -778,7 +778,7 @@ describe('ReactInternalTestUtils console assertions', () => {
       });
 
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.log was called without assertConsoleLogDev:
         + Not asserted
@@ -812,7 +812,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitForAll(['foo', 'bar', 'baz']);
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.log was called without assertConsoleLogDev:
         + Not asserted
@@ -848,7 +848,7 @@ describe('ReactInternalTestUtils console assertions', () => {
       });
       if (!__DEV__) {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.log was called without assertConsoleLogDev:
           + Not asserted
@@ -859,7 +859,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         `);
       } else {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.log was called without assertConsoleLogDev:
           + Not asserted
@@ -919,7 +919,7 @@ describe('ReactInternalTestUtils console assertions', () => {
 
       if (!__DEV__) {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.warn was called without assertConsoleWarnDev:
           + A
@@ -930,7 +930,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         `);
       } else {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.warn was called without assertConsoleWarnDev:
           + A%s,
@@ -975,7 +975,7 @@ describe('ReactInternalTestUtils console assertions', () => {
 
       if (!__DEV__) {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.log was called without assertConsoleLogDev:
           + A
@@ -996,7 +996,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         `);
       } else {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.log was called without assertConsoleLogDev:
           + A
@@ -1703,7 +1703,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitFor(['foo', 'bar']);
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.warn was called without assertConsoleWarnDev:
         + Not asserted
@@ -1745,7 +1745,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitForThrow('Oh no!');
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.warn was called without assertConsoleWarnDev:
         + Not asserted
@@ -1780,7 +1780,7 @@ describe('ReactInternalTestUtils console assertions', () => {
       });
 
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.warn was called without assertConsoleWarnDev:
         + Not asserted
@@ -1814,7 +1814,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitForAll(['foo', 'bar', 'baz']);
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.warn was called without assertConsoleWarnDev:
         + Not asserted
@@ -1850,7 +1850,7 @@ describe('ReactInternalTestUtils console assertions', () => {
       });
       if (!__DEV__) {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.warn was called without assertConsoleWarnDev:
           + Not asserted
@@ -1861,7 +1861,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         `);
       } else {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.warn was called without assertConsoleWarnDev:
           + Not asserted%s,
@@ -1924,7 +1924,7 @@ describe('ReactInternalTestUtils console assertions', () => {
 
       if (!__DEV__) {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.error was called without assertConsoleErrorDev:
           + A
@@ -1935,7 +1935,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         `);
       } else {
         expect(message).toMatchInlineSnapshot(`
-                  "asserConsoleLogsCleared(expected)
+                  "assertConsoleLogsCleared(expected)
 
                   console.error was called without assertConsoleErrorDev:
                   + A%s,
@@ -1980,7 +1980,7 @@ describe('ReactInternalTestUtils console assertions', () => {
 
       if (!__DEV__) {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.log was called without assertConsoleLogDev:
           + A
@@ -2001,7 +2001,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         `);
       } else {
         expect(message).toMatchInlineSnapshot(`
-                  "asserConsoleLogsCleared(expected)
+                  "assertConsoleLogsCleared(expected)
 
                   console.log was called without assertConsoleLogDev:
                   + A
@@ -2167,6 +2167,29 @@ describe('ReactInternalTestUtils console assertions', () => {
         + Hi      in div (at **)
         + Wow      in div (at **)
         + Bye      in div (at **)"
+      `);
+    });
+
+    // @gate __DEV__
+    it('fails if last received error containing "undefined" is not included', () => {
+      const message = expectToThrowFailure(() => {
+        console.error('Hi');
+        console.error(
+          "TypeError: Cannot read properties of undefined (reading 'stack')\n" +
+            '    in Foo (at **)'
+        );
+        assertConsoleErrorDev([['Hi', {withoutStack: true}]]);
+      });
+      expect(message).toMatchInlineSnapshot(`
+        "assertConsoleErrorDev(expected)
+
+        Unexpected error(s) recorded.
+
+        - Expected errors
+        + Received errors
+
+          Hi
+        + TypeError: Cannot read properties of undefined (reading 'stack')     in Foo (at **)"
       `);
     });
     // @gate __DEV__
@@ -2752,7 +2775,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitFor(['foo', 'bar']);
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.error was called without assertConsoleErrorDev:
         + Not asserted
@@ -2794,7 +2817,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitForThrow('Oh no!');
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.error was called without assertConsoleErrorDev:
         + Not asserted
@@ -2829,7 +2852,7 @@ describe('ReactInternalTestUtils console assertions', () => {
       });
 
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.error was called without assertConsoleErrorDev:
         + Not asserted
@@ -2863,7 +2886,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         await waitForAll(['foo', 'bar', 'baz']);
       });
       expect(message).toMatchInlineSnapshot(`
-        "asserConsoleLogsCleared(expected)
+        "assertConsoleLogsCleared(expected)
 
         console.error was called without assertConsoleErrorDev:
         + Not asserted
@@ -2899,7 +2922,7 @@ describe('ReactInternalTestUtils console assertions', () => {
       });
       if (!__DEV__) {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.error was called without assertConsoleErrorDev:
           + Not asserted
@@ -2910,7 +2933,7 @@ describe('ReactInternalTestUtils console assertions', () => {
         `);
       } else {
         expect(message).toMatchInlineSnapshot(`
-          "asserConsoleLogsCleared(expected)
+          "assertConsoleLogsCleared(expected)
 
           console.error was called without assertConsoleErrorDev:
           + Not asserted%s,

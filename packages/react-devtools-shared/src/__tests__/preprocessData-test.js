@@ -194,7 +194,7 @@ describe('Timeline profiler', () => {
       });
 
       // These should be dynamic to mimic a real profile,
-      // but reprooducible between test runs.
+      // but reproducible between test runs.
       let pid = 0;
       let tid = 0;
       let startTime = 0;
@@ -857,7 +857,7 @@ describe('Timeline profiler', () => {
                 {
                   "batchUID": 0,
                   "depth": 0,
-                  "duration": 0.014,
+                  "duration": 0.012,
                   "lanes": "0b0000000000000000000000000000101",
                   "timestamp": 0.008,
                   "type": "render-idle",
@@ -873,25 +873,17 @@ describe('Timeline profiler', () => {
                 {
                   "batchUID": 0,
                   "depth": 0,
-                  "duration": 0.010,
+                  "duration": 0.008,
                   "lanes": "0b0000000000000000000000000000101",
                   "timestamp": 0.012,
                   "type": "commit",
                 },
                 {
                   "batchUID": 0,
-                  "depth": 1,
-                  "duration": 0.001,
-                  "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.02,
-                  "type": "layout-effects",
-                },
-                {
-                  "batchUID": 0,
                   "depth": 0,
                   "duration": 0.004,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.023,
+                  "timestamp": 0.021,
                   "type": "passive-effects",
                 },
               ],
@@ -899,9 +891,9 @@ describe('Timeline profiler', () => {
                 {
                   "batchUID": 1,
                   "depth": 0,
-                  "duration": 0.014,
+                  "duration": 0.012,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.028,
+                  "timestamp": 0.026,
                   "type": "render-idle",
                 },
                 {
@@ -909,31 +901,23 @@ describe('Timeline profiler', () => {
                   "depth": 0,
                   "duration": 0.003,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.028,
+                  "timestamp": 0.026,
                   "type": "render",
                 },
                 {
                   "batchUID": 1,
                   "depth": 0,
-                  "duration": 0.010,
+                  "duration": 0.008,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.032,
+                  "timestamp": 0.03,
                   "type": "commit",
-                },
-                {
-                  "batchUID": 1,
-                  "depth": 1,
-                  "duration": 0.001,
-                  "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.04,
-                  "type": "layout-effects",
                 },
                 {
                   "batchUID": 1,
                   "depth": 0,
                   "duration": 0.003,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.043,
+                  "timestamp": 0.039,
                   "type": "passive-effects",
                 },
               ],
@@ -949,26 +933,26 @@ describe('Timeline profiler', () => {
               {
                 "componentName": "App",
                 "duration": 0.002,
-                "timestamp": 0.024,
+                "timestamp": 0.022,
                 "type": "passive-effect-mount",
                 "warning": null,
               },
               {
                 "componentName": "App",
                 "duration": 0.001,
-                "timestamp": 0.029,
+                "timestamp": 0.027,
                 "type": "render",
                 "warning": null,
               },
               {
                 "componentName": "App",
                 "duration": 0.001,
-                "timestamp": 0.044,
+                "timestamp": 0.04,
                 "type": "passive-effect-mount",
                 "warning": null,
               },
             ],
-            "duration": 0.046,
+            "duration": 0.042,
             "flamechart": [],
             "internalModuleSourceToRanges": Map {
               undefined => [
@@ -1031,7 +1015,7 @@ describe('Timeline profiler', () => {
                 {
                   "batchUID": 0,
                   "depth": 0,
-                  "duration": 0.014,
+                  "duration": 0.012,
                   "lanes": "0b0000000000000000000000000000101",
                   "timestamp": 0.008,
                   "type": "render-idle",
@@ -1047,33 +1031,25 @@ describe('Timeline profiler', () => {
                 {
                   "batchUID": 0,
                   "depth": 0,
-                  "duration": 0.010,
+                  "duration": 0.008,
                   "lanes": "0b0000000000000000000000000000101",
                   "timestamp": 0.012,
                   "type": "commit",
                 },
                 {
                   "batchUID": 0,
-                  "depth": 1,
-                  "duration": 0.001,
-                  "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.02,
-                  "type": "layout-effects",
-                },
-                {
-                  "batchUID": 0,
                   "depth": 0,
                   "duration": 0.004,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.023,
+                  "timestamp": 0.021,
                   "type": "passive-effects",
                 },
                 {
                   "batchUID": 1,
                   "depth": 0,
-                  "duration": 0.014,
+                  "duration": 0.012,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.028,
+                  "timestamp": 0.026,
                   "type": "render-idle",
                 },
                 {
@@ -1081,31 +1057,23 @@ describe('Timeline profiler', () => {
                   "depth": 0,
                   "duration": 0.003,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.028,
+                  "timestamp": 0.026,
                   "type": "render",
                 },
                 {
                   "batchUID": 1,
                   "depth": 0,
-                  "duration": 0.010,
+                  "duration": 0.008,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.032,
+                  "timestamp": 0.03,
                   "type": "commit",
-                },
-                {
-                  "batchUID": 1,
-                  "depth": 1,
-                  "duration": 0.001,
-                  "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.04,
-                  "type": "layout-effects",
                 },
                 {
                   "batchUID": 1,
                   "depth": 0,
                   "duration": 0.003,
                   "lanes": "0b0000000000000000000000000000101",
-                  "timestamp": 0.043,
+                  "timestamp": 0.039,
                   "type": "passive-effects",
                 },
               ],
@@ -1149,7 +1117,7 @@ describe('Timeline profiler', () => {
               {
                 "componentName": "App",
                 "lanes": "0b0000000000000000000000000000101",
-                "timestamp": 0.025,
+                "timestamp": 0.023,
                 "type": "schedule-state-update",
                 "warning": null,
               },
@@ -1254,6 +1222,15 @@ describe('Timeline profiler', () => {
         let promise = null;
         let resolvedValue = null;
         function readValue(value) {
+          if (React.use) {
+            if (promise === null) {
+              promise = Promise.resolve(true).then(() => {
+                return value;
+              });
+              promise.displayName = 'Testing displayName';
+            }
+            return React.use(promise);
+          }
           if (resolvedValue !== null) {
             return resolvedValue;
           } else if (promise === null) {
@@ -1273,7 +1250,7 @@ describe('Timeline profiler', () => {
         const testMarks = [creactCpuProfilerSample()];
 
         const root = ReactDOMClient.createRoot(document.createElement('div'));
-        utils.act(() =>
+        await utils.actAsync(() =>
           root.render(
             <React.Suspense fallback="Loading...">
               <Component />
@@ -1295,7 +1272,7 @@ describe('Timeline profiler', () => {
         describe('long event handlers', () => {
           // @reactVersion >= 18.0
           // @reactVersion <= 18.2
-          it('should not warn when React scedules a (sync) update inside of a short event handler', async () => {
+          it('should not warn when React schedules a (sync) update inside of a short event handler', async () => {
             function App() {
               return null;
             }
@@ -1343,7 +1320,7 @@ describe('Timeline profiler', () => {
 
           // @reactVersion >= 18.0
           // @reactVersion <= 18.2
-          it('should warn when React scedules a long (sync) update inside of an event', async () => {
+          it('should warn when React schedules a long (sync) update inside of an event', async () => {
             function App() {
               return null;
             }
@@ -1771,7 +1748,7 @@ describe('Timeline profiler', () => {
 
         describe('errors thrown while rendering', () => {
           // @reactVersion >= 18.0
-          it('shoult parse Errors thrown during render', async () => {
+          it('should parse Errors thrown during render', async () => {
             jest.spyOn(console, 'error');
 
             class ErrorBoundary extends React.Component {
@@ -1823,6 +1800,14 @@ describe('Timeline profiler', () => {
             let promise = null;
             let resolvedValue = null;
             function readValue(value) {
+              if (React.use) {
+                if (promise === null) {
+                  promise = Promise.resolve(true).then(() => {
+                    return value;
+                  });
+                }
+                return React.use(promise);
+              }
               if (resolvedValue !== null) {
                 return resolvedValue;
               } else if (promise === null) {
@@ -1881,6 +1866,14 @@ describe('Timeline profiler', () => {
             let promise = null;
             let resolvedValue = null;
             function readValue(value) {
+              if (React.use) {
+                if (promise === null) {
+                  promise = Promise.resolve(true).then(() => {
+                    return value;
+                  });
+                }
+                return React.use(promise);
+              }
               if (resolvedValue !== null) {
                 return resolvedValue;
               } else if (promise === null) {
@@ -2194,14 +2187,6 @@ describe('Timeline profiler', () => {
               },
               {
                 "batchUID": 1,
-                "depth": 1,
-                "duration": 0,
-                "lanes": "0b0000000000000000000000000100000",
-                "timestamp": 10,
-                "type": "layout-effects",
-              },
-              {
-                "batchUID": 1,
                 "depth": 0,
                 "duration": 0,
                 "lanes": "0b0000000000000000000000000100000",
@@ -2233,14 +2218,6 @@ describe('Timeline profiler', () => {
                 "lanes": "0b0000000000000000000000000100000",
                 "timestamp": 10,
                 "type": "commit",
-              },
-              {
-                "batchUID": 2,
-                "depth": 1,
-                "duration": 0,
-                "lanes": "0b0000000000000000000000000100000",
-                "timestamp": 10,
-                "type": "layout-effects",
               },
               {
                 "batchUID": 2,
@@ -2292,8 +2269,8 @@ describe('Timeline profiler', () => {
             8 => "InputContinuous",
             16 => "DefaultHydration",
             32 => "Default",
-            64 => "TransitionHydration",
-            128 => "Transition",
+            64 => undefined,
+            128 => "TransitionHydration",
             256 => "Transition",
             512 => "Transition",
             1024 => "Transition",
@@ -2351,14 +2328,6 @@ describe('Timeline profiler', () => {
               },
               {
                 "batchUID": 1,
-                "depth": 1,
-                "duration": 0,
-                "lanes": "0b0000000000000000000000000100000",
-                "timestamp": 10,
-                "type": "layout-effects",
-              },
-              {
-                "batchUID": 1,
                 "depth": 0,
                 "duration": 0,
                 "lanes": "0b0000000000000000000000000100000",
@@ -2388,14 +2357,6 @@ describe('Timeline profiler', () => {
                 "lanes": "0b0000000000000000000000000100000",
                 "timestamp": 10,
                 "type": "commit",
-              },
-              {
-                "batchUID": 2,
-                "depth": 1,
-                "duration": 0,
-                "lanes": "0b0000000000000000000000000100000",
-                "timestamp": 10,
-                "type": "layout-effects",
               },
               {
                 "batchUID": 2,

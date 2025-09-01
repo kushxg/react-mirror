@@ -27,6 +27,7 @@ import {
   transitionLaneExpirationMs,
   retryLaneExpirationMs,
   disableLegacyMode,
+  enableDefaultTransitionIndicator,
 } from 'shared/ReactFeatureFlags';
 import {isDevToolsPresent} from './ReactFiberDevToolsHook';
 import {clz32} from './clz32';
@@ -640,6 +641,10 @@ export function includesOnlySuspenseyCommitEligibleLanes(
   );
 }
 
+export function includesLoadingIndicatorLanes(lanes: Lanes): boolean {
+  return (lanes & (SyncLane | DefaultLane)) !== NoLanes;
+}
+
 export function includesBlockingLane(lanes: Lanes): boolean {
   const SyncDefaultLanes =
     InputContinuousHydrationLane |
@@ -766,6 +771,10 @@ export function createLaneMap<T>(initial: T): LaneMap<T> {
 
 export function markRootUpdated(root: FiberRoot, updateLane: Lane) {
   root.pendingLanes |= updateLane;
+  if (enableDefaultTransitionIndicator) {
+    // Mark that this lane might need a loading indicator to be shown.
+    root.indicatorLanes |= updateLane & TransitionLanes;
+  }
 
   // If there are any suspended transitions, it's possible this new update
   // could unblock them. Clear the suspended lanes so that we can try rendering
@@ -846,6 +855,10 @@ export function markRootFinished(
   root.suspendedLanes = NoLanes;
   root.pingedLanes = NoLanes;
   root.warmLanes = NoLanes;
+
+  if (enableDefaultTransitionIndicator) {
+    root.indicatorLanes &= remainingLanes;
+  }
 
   root.expiredLanes &= remainingLanes;
 
@@ -1023,7 +1036,7 @@ export function getBumpedLaneForHydration(
     (renderLane & SyncUpdateLanes) !== NoLane
       ? // Unify sync lanes. We don't do this inside getBumpedLaneForHydrationByLane
         // because that causes things to flush synchronously when they shouldn't.
-        // TODO: This is not coherent but that's beacuse the unification is not coherent.
+        // TODO: This is not coherent but that's because the unification is not coherent.
         // We need to get merge these into an actual single lane.
         SyncHydrationLane
       : getBumpedLaneForHydrationByLane(renderLane);

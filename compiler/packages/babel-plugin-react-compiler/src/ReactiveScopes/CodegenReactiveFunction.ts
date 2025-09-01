@@ -13,7 +13,7 @@ import {
   pruneUnusedLabels,
   renameVariables,
 } from '.';
-import {CompilerError, ErrorSeverity} from '../CompilerError';
+import {CompilerError, ErrorCategory, ErrorSeverity} from '../CompilerError';
 import {Environment, ExternalFunction} from '../HIR';
 import {
   ArrayPattern,
@@ -44,7 +44,7 @@ import {
   getHookKind,
   makeIdentifierName,
 } from '../HIR/HIR';
-import {printIdentifier, printPlace} from '../HIR/PrintHIR';
+import {printIdentifier, printInstruction, printPlace} from '../HIR/PrintHIR';
 import {eachPatternOperand} from '../HIR/visitors';
 import {Err, Ok, Result} from '../Utils/Result';
 import {GuardKind} from '../Utils/RuntimeDiagnosticConstants';
@@ -132,7 +132,7 @@ export function codegenFunction(
 
   /**
    * Fast Refresh reuses component instances at runtime even as the source of the component changes.
-   * The generated code needs to prevent values from one version of the code being reused after a code cange.
+   * The generated code needs to prevent values from one version of the code being reused after a code change.
    * If HMR detection is enabled and we know the source code of the component, assign a cache slot to track
    * the source hash, and later, emit code to check for source changes and reset the cache on source changes.
    */
@@ -349,11 +349,9 @@ function codegenReactiveFunction(
   fn: ReactiveFunction,
 ): Result<CodegenFunction, CompilerError> {
   for (const param of fn.params) {
-    if (param.kind === 'Identifier') {
-      cx.temp.set(param.identifier.declarationId, null);
-    } else {
-      cx.temp.set(param.place.identifier.declarationId, null);
-    }
+    const place = param.kind === 'Identifier' ? param : param.place;
+    cx.temp.set(place.identifier.declarationId, null);
+    cx.declare(place.identifier);
   }
 
   const params = fn.params.map(param => convertParameter(param));
@@ -1183,7 +1181,7 @@ function codegenTerminal(
               ? codegenPlaceToExpression(cx, case_.test)
               : null;
           const block = codegenBlock(cx, case_.block!);
-          return t.switchCase(test, [block]);
+          return t.switchCase(test, block.body.length === 0 ? [] : [block]);
         }),
       );
     }
@@ -1310,7 +1308,7 @@ function codegenInstructionNullable(
         });
         CompilerError.invariant(value?.type === 'FunctionExpression', {
           reason: 'Expected a function as a function declaration value',
-          description: null,
+          description: `Got ${value == null ? String(value) : value.type} at ${printInstruction(instr)}`,
           loc: instr.value.loc,
           suggestions: null,
         });
@@ -1726,7 +1724,7 @@ function codegenInstructionValue(
     }
     case 'UnaryExpression': {
       value = t.unaryExpression(
-        instrValue.operator as 'throw', // todo
+        instrValue.operator,
         codegenPlaceToExpression(cx, instrValue.value),
       );
       break;
@@ -2187,6 +2185,7 @@ function codegenInstructionValue(
                 (declarator.id as t.Identifier).name
               }'`,
               severity: ErrorSeverity.Todo,
+              category: ErrorCategory.Todo,
               loc: declarator.loc ?? null,
               suggestions: null,
             });
@@ -2195,6 +2194,7 @@ function codegenInstructionValue(
             cx.errors.push({
               reason: `(CodegenReactiveFunction::codegenInstructionValue) Handle conversion of ${stmt.type} to expression`,
               severity: ErrorSeverity.Todo,
+              category: ErrorCategory.Todo,
               loc: stmt.loc ?? null,
               suggestions: null,
             });
@@ -2582,7 +2582,16 @@ function codegenValue(
   value: boolean | number | string | null | undefined,
 ): t.Expression {
   if (typeof value === 'number') {
-    return t.numericLiteral(value);
+    if (value < 0) {
+      /**
+       * Babel's code generator produces invalid JS for negative numbers when
+       * run with { compact: true }.
+       * See repro https://codesandbox.io/p/devbox/5d47fr
+       */
+      return t.unaryExpression('-', t.numericLiteral(-value), false);
+    } else {
+      return t.numericLiteral(value);
+    }
   } else if (typeof value === 'boolean') {
     return t.booleanLiteral(value);
   } else if (typeof value === 'string') {

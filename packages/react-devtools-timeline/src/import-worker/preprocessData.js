@@ -109,7 +109,7 @@ function updateLaneToLabelMap(
   laneLabelTuplesString: string,
 ): void {
   // These marks appear multiple times in the data;
-  // We only need to extact them once.
+  // We only need to extract them once.
   if (profilerData.laneToLabelMap.size === 0) {
     const laneLabelTuples = laneLabelTuplesString.split(',');
     for (let laneIndex = 0; laneIndex < laneLabelTuples.length; laneIndex++) {
@@ -123,7 +123,7 @@ function updateLaneToLabelMap(
 
 let profilerVersion = null;
 
-function getLastType(stack: $PropertyType<ProcessorState, 'measureStack'>) {
+function getLastType(stack: ProcessorState['measureStack']) {
   if (stack.length > 0) {
     const {type} = stack[stack.length - 1];
     return type;
@@ -131,7 +131,7 @@ function getLastType(stack: $PropertyType<ProcessorState, 'measureStack'>) {
   return null;
 }
 
-function getDepth(stack: $PropertyType<ProcessorState, 'measureStack'>) {
+function getDepth(stack: ProcessorState['measureStack']) {
   if (stack.length > 0) {
     const {depth, type} = stack[stack.length - 1];
     return type === 'render-idle' ? depth : depth + 1;
@@ -180,7 +180,7 @@ function markWorkCompleted(
   type: ReactMeasureType,
   stopTime: Milliseconds,
   currentProfilerData: TimelineData,
-  stack: $PropertyType<ProcessorState, 'measureStack'>,
+  stack: ProcessorState['measureStack'],
 ) {
   if (stack.length === 0) {
     console.error(
@@ -214,7 +214,7 @@ function markWorkCompleted(
 
 function throwIfIncomplete(
   type: ReactMeasureType,
-  stack: $PropertyType<ProcessorState, 'measureStack'>,
+  stack: ProcessorState['measureStack'],
 ) {
   const lastIndex = stack.length - 1;
   if (lastIndex >= 0) {
@@ -284,7 +284,7 @@ function processEventDispatch(
 
     profilerData.nativeEvents.push(nativeEvent);
 
-    // Keep track of curent event in case future ones overlap.
+    // Keep track of current event in case future ones overlap.
     // We separate them into different vertical lanes in this case.
     state.nativeEventStack.push(nativeEvent);
   }
@@ -509,7 +509,7 @@ function processTimelineEvent(
       } else if (name.startsWith('--schedule-forced-update-')) {
         const [laneBitmaskString, componentName] = name.slice(25).split('-');
 
-        const forceUpdateEvent = {
+        const forceUpdateEvent: SchedulingEvent = {
           type: 'schedule-force-update',
           lanes: getLanesFromTransportDecimalBitmask(laneBitmaskString),
           componentName,
@@ -527,7 +527,7 @@ function processTimelineEvent(
       } else if (name.startsWith('--schedule-state-update-')) {
         const [laneBitmaskString, componentName] = name.slice(24).split('-');
 
-        const stateUpdateEvent = {
+        const stateUpdateEvent: SchedulingEvent = {
           type: 'schedule-state-update',
           lanes: getLanesFromTransportDecimalBitmask(laneBitmaskString),
           componentName,
@@ -578,7 +578,7 @@ function processTimelineEvent(
         // We can't know if they'll be resolved or not at this point.
         // We'll just give them a default (fake) duration width.
 
-        const suspenseEvent = {
+        const suspenseEvent: SuspenseEvent = {
           componentName,
           depth,
           duration: null,
@@ -1045,7 +1045,7 @@ export default async function preprocessData(
   // We'll thus expect there to be a 'Profile' event; if there is not one, we
   // can deduce that there are no flame chart events. As we expect React
   // scheduling profiling user timing marks to be recorded together with browser
-  // flame chart events, we can futher deduce that the data is invalid and we
+  // flame chart events, we can further deduce that the data is invalid and we
   // don't bother finding React events.
   const indexOfProfileEvent = timeline.findIndex(
     event => event.name === 'Profile',

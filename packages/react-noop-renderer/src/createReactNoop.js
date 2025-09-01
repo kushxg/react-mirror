@@ -253,7 +253,7 @@ function createReactNoop(reconciler: Function, useMutation: boolean) {
       id: instance.id,
       type: type,
       parent: instance.parent,
-      children: keepChildren ? instance.children : children ?? [],
+      children: keepChildren ? instance.children : (children ?? []),
       text: shouldSetTextContent(type, newProps)
         ? computeText((newProps.children: any) + '', instance.context)
         : null,
@@ -1119,7 +1119,7 @@ function createReactNoop(reconciler: Function, useMutation: boolean) {
     }
     if (disableLegacyMode) {
       const previousTransition = ReactSharedInternals.T;
-      const preivousEventPriority = currentEventPriority;
+      const previousEventPriority = currentEventPriority;
       try {
         ReactSharedInternals.T = null;
         currentEventPriority = DiscreteEventPriority;
@@ -1130,7 +1130,7 @@ function createReactNoop(reconciler: Function, useMutation: boolean) {
         }
       } finally {
         ReactSharedInternals.T = previousTransition;
-        currentEventPriority = preivousEventPriority;
+        currentEventPriority = previousEventPriority;
         NoopRenderer.flushSyncWork();
       }
     } else {
@@ -1142,9 +1142,7 @@ function createReactNoop(reconciler: Function, useMutation: boolean) {
     // TODO: Turn this on once tests are fixed
     // console.error(error);
   }
-  function onDefaultTransitionIndicator(): void | (() => void) {
-    // TODO: Allow this as an option.
-  }
+  function onDefaultTransitionIndicator(): void | (() => void) {}
 
   let idCounter = 0;
 
@@ -1389,7 +1387,7 @@ function createReactNoop(reconciler: Function, useMutation: boolean) {
     },
 
     findInstance(
-      componentOrElement: Element | ?React$Component<any, any>,
+      componentOrElement: Element | ?component(...props: any),
     ): null | Instance | TextInstance {
       if (componentOrElement == null) {
         return null;

@@ -149,7 +149,7 @@ function resolveMostRecentTextCache(text) {
   if (caches.length === 0) {
     throw Error('Cache does not exist.');
   } else {
-    // Resolve the most recently created cache. An older cache can by
+    // Resolve the most recently created cache. An older cache can be
     // resolved with `caches[index].resolve(text)`.
     caches[caches.length - 1].resolve(text);
   }
@@ -172,7 +172,7 @@ test('regression (#20932): return pointer is correct before entering deleted tre
 
   function App() {
     return (
-      <SuspenseList revealOrder="forwards">
+      <SuspenseList revealOrder="forwards" tail="visible">
         <Suspense fallback={<Text text="Loading Async..." />}>
           <Async />
         </Suspense>

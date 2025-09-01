@@ -173,7 +173,7 @@ if (process.env.REACT_CLASS_EQUIVALENCE_TEST) {
     // Install a global error event handler. We treat global error events as
     // test failures, same as Jest's default behavior.
     //
-    // Becaused we installed our own error event handler, Jest will not report a
+    // Because we installed our own error event handler, Jest will not report a
     // test failure. Conceptually it's as if we wrapped the entire test event in
     // a try-catch.
     let didError = false;
@@ -293,3 +293,18 @@ if (process.env.REACT_CLASS_EQUIVALENCE_TEST) {
     return require('internal-test-utils/ReactJSDOM.js');
   });
 }
+
+// We mock createHook so that we can automatically clean it up.
+let installedHook = null;
+jest.mock('async_hooks', () => {
+  const actual = jest.requireActual('async_hooks');
+  return {
+    ...actual,
+    createHook(config) {
+      if (installedHook) {
+        installedHook.disable();
+      }
+      return (installedHook = actual.createHook(config));
+    },
+  };
+});

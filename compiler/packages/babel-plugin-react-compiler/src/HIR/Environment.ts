@@ -47,8 +47,9 @@ import {
   ShapeRegistry,
   addHook,
 } from './ObjectShape';
-import {Scope as BabelScope} from '@babel/traverse';
+import {Scope as BabelScope, NodePath} from '@babel/traverse';
 import {TypeSchema} from './TypeSchema';
+import {FlowTypeEnv} from '../Flood/Types';
 
 export const ReactElementSymbolSchema = z.object({
   elementSymbol: z.union([
@@ -237,11 +238,17 @@ export const EnvironmentConfigSchema = z.object({
 
   /**
    * Enable use of type annotations in the source to drive type inference. By default
-   * Forget attemps to infer types using only information that is guaranteed correct
+   * Forget attempts to infer types using only information that is guaranteed correct
    * given the source, and does not trust user-supplied type annotations. This mode
    * enables trusting user type annotations.
    */
   enableUseTypeAnnotations: z.boolean().default(false),
+
+  /**
+   * Allows specifying a function that can populate HIR with type information from
+   * Flow
+   */
+  flowTypeProvider: z.nullable(z.function().args(z.string())).default(null),
 
   /**
    * Enables inference of optional dependency chains. Without this flag
@@ -260,21 +267,19 @@ export const EnvironmentConfigSchema = z.object({
    *   {
    *     module: 'react',
    *     imported: 'useEffect',
-   *     numRequiredArgs: 1,
+   *     autodepsIndex: 1,
    *   },{
    *     module: 'MyExperimentalEffectHooks',
    *     imported: 'useExperimentalEffect',
-   *     numRequiredArgs: 2,
+   *     autodepsIndex: 2,
    *   },
    * ]
    * would insert dependencies for calls of `useEffect` imported from `react` and calls of
    * useExperimentalEffect` from `MyExperimentalEffectHooks`.
    *
-   * `numRequiredArgs` tells the compiler the amount of arguments required to append a dependency
-   *  array to the end of the call. With the configuration above, we'd insert dependencies for
-   *  `useEffect` if it is only given a single argument and it would be appended to the argument list.
-   *
-   * numRequiredArgs must always be greater than 0, otherwise there is no function to analyze for dependencies
+   * `autodepsIndex` tells the compiler which index we expect the AUTODEPS to appear in.
+   *  With the configuration above, we'd insert dependencies for `useEffect` if it has two
+   *  arguments, and the second is AUTODEPS.
    *
    * Still experimental.
    */
@@ -283,7 +288,7 @@ export const EnvironmentConfigSchema = z.object({
       z.array(
         z.object({
           function: ExternalFunctionSchema,
-          numRequiredArgs: z.number().min(1, 'numRequiredArgs must be > 0'),
+          autodepsIndex: z.number().min(1, 'autodepsIndex must be > 0'),
         }),
       ),
     )
@@ -294,7 +299,7 @@ export const EnvironmentConfigSchema = z.object({
    * An alternative to the standard JSX transform which replaces JSX with React's jsxProd() runtime
    * Currently a prod-only optimization, requiring Fast JSX dependencies
    *
-   * The symbol configuration is set for backwards compatability with pre-React 19 transforms
+   * The symbol configuration is set for backwards compatibility with pre-React 19 transforms
    */
   inlineJsxTransform: ReactElementSymbolSchema.nullable().default(null),
 
@@ -315,10 +320,16 @@ export const EnvironmentConfigSchema = z.object({
   validateNoSetStateInRender: z.boolean().default(true),
 
   /**
-   * Validates that setState is not called directly within a passive effect (useEffect).
+   * Validates that setState is not called synchronously within an effect (useEffect and friends).
    * Scheduling a setState (with an event listener, subscription, etc) is valid.
    */
-  validateNoSetStateInPassiveEffects: z.boolean().default(false),
+  validateNoSetStateInEffects: z.boolean().default(false),
+
+  /**
+   * Validates that effects are not used to calculate derived data which could instead be computed
+   * during render.
+   */
+  validateNoDerivedComputationsInEffects: z.boolean().default(false),
 
   /**
    * Validates against creating JSX within a try block and recommends using an error boundary
@@ -528,11 +539,11 @@ export const EnvironmentConfigSchema = z.object({
   throwUnknownException__testonly: z.boolean().default(false),
 
   /**
-   * Enables deps of a function epxression to be treated as conditional. This
+   * Enables deps of a function expression to be treated as conditional. This
    * makes sure we don't load a dep when it's a property (to check if it has
    * changed) and instead check the receiver.
    *
-   * This makes sure we don't end up throwing when the reciver is null. Consider
+   * This makes sure we don't end up throwing when the receiver is null. Consider
    * this code:
    *
    * ```
@@ -578,7 +589,7 @@ export const EnvironmentConfigSchema = z.object({
   enableCustomTypeDefinitionForReanimated: z.boolean().default(false),
 
   /**
-   * If specified, this value is used as a pattern for determing which global values should be
+   * If specified, this value is used as a pattern for determining which global values should be
    * treated as hooks. The pattern should have a single capture group, which will be used as
    * the hook name for the purposes of resolving hook definitions (for builtin hooks)_.
    *
@@ -605,7 +616,7 @@ export const EnvironmentConfigSchema = z.object({
    *
    * Here the variables `ref` and `myRef` will be typed as Refs.
    */
-  enableTreatRefLikeIdentifiersAsRefs: z.boolean().default(false),
+  enableTreatRefLikeIdentifiersAsRefs: z.boolean().default(true),
 
   /*
    * If specified a value, the compiler lowers any calls to `useContext` to use
@@ -628,6 +639,17 @@ export const EnvironmentConfigSchema = z.object({
    * ```
    */
   lowerContextAccess: ExternalFunctionSchema.nullable().default(null),
+
+  /**
+   * If enabled, will validate useMemos that don't return any values:
+   *
+   * Valid:
+   *   useMemo(() => foo, [foo]);
+   *   useMemo(() => { return foo }, [foo]);
+   * Invalid:
+   *   useMemo(() => { ... }, [...]);
+   */
+  validateNoVoidUseMemo: z.boolean().default(false),
 });
 
 export type EnvironmentConfig = z.infer<typeof EnvironmentConfigSchema>;
@@ -654,7 +676,7 @@ export class Environment {
   #globals: GlobalRegistry;
   #shapes: ShapeRegistry;
   #moduleTypes: Map<string, Global | null> = new Map();
-  #nextIdentifer: number = 0;
+  #nextIdentifier: number = 0;
   #nextBlock: number = 0;
   #nextScope: number = 0;
   #scope: BabelScope;
@@ -675,6 +697,9 @@ export class Environment {
 
   #contextIdentifiers: Set<t.Identifier>;
   #hoistedIdentifiers: Set<t.Identifier>;
+  parentFunction: NodePath<t.Function>;
+
+  #flowTypeEnvironment: FlowTypeEnv | null;
 
   constructor(
     scope: BabelScope,
@@ -682,6 +707,7 @@ export class Environment {
     compilerMode: CompilerMode,
     config: EnvironmentConfig,
     contextIdentifiers: Set<t.Identifier>,
+    parentFunction: NodePath<t.Function>, // the outermost function being compiled
     logger: Logger | null,
     filename: string | null,
     code: string | null,
@@ -740,8 +766,29 @@ export class Environment {
       this.#moduleTypes.set(REANIMATED_MODULE_NAME, reanimatedModuleType);
     }
 
+    this.parentFunction = parentFunction;
     this.#contextIdentifiers = contextIdentifiers;
     this.#hoistedIdentifiers = new Set();
+
+    if (config.flowTypeProvider != null) {
+      this.#flowTypeEnvironment = new FlowTypeEnv();
+      CompilerError.invariant(code != null, {
+        reason:
+          'Expected Environment to be initialized with source code when a Flow type provider is specified',
+        loc: null,
+      });
+      this.#flowTypeEnvironment.init(this, code);
+    } else {
+      this.#flowTypeEnvironment = null;
+    }
+  }
+
+  get typeContext(): FlowTypeEnv {
+    CompilerError.invariant(this.#flowTypeEnvironment != null, {
+      reason: 'Flow type environment not initialized',
+      loc: null,
+    });
+    return this.#flowTypeEnvironment;
   }
 
   get isInferredMemoEnabled(): boolean {
@@ -749,7 +796,7 @@ export class Environment {
   }
 
   get nextIdentifierId(): IdentifierId {
-    return makeIdentifierId(this.#nextIdentifer++);
+    return makeIdentifierId(this.#nextIdentifier++);
   }
 
   get nextBlockId(): BlockId {

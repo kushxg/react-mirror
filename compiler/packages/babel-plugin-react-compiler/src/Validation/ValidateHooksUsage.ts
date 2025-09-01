@@ -9,6 +9,7 @@ import * as t from '@babel/types';
 import {
   CompilerError,
   CompilerErrorDetail,
+  ErrorCategory,
   ErrorSeverity,
 } from '../CompilerError';
 import {computeUnconditionalBlocks} from '../HIR/ComputeUnconditionalBlocks';
@@ -118,12 +119,13 @@ export function validateHooksUsage(
 
     /*
      * In some circumstances such as optional calls, we may first encounter a "hook may not be referenced as normal values" error.
-     * If that same place is also used as a conditional call, upgrade the error to a conditonal hook error
+     * If that same place is also used as a conditional call, upgrade the error to a conditional hook error
      */
     if (previousError === undefined || previousError.reason !== reason) {
       recordError(
         place.loc,
         new CompilerErrorDetail({
+          category: ErrorCategory.Hooks,
           description: null,
           reason,
           loc: place.loc,
@@ -140,6 +142,7 @@ export function validateHooksUsage(
       recordError(
         place.loc,
         new CompilerErrorDetail({
+          category: ErrorCategory.Hooks,
           description: null,
           reason:
             'Hooks may not be referenced as normal values, they must be called. See https://react.dev/reference/rules/react-calls-components-and-hooks#never-pass-around-hooks-as-regular-values',
@@ -157,6 +160,7 @@ export function validateHooksUsage(
       recordError(
         place.loc,
         new CompilerErrorDetail({
+          category: ErrorCategory.Hooks,
           description: null,
           reason:
             'Hooks must be the same function on every render, but this value may change over time to a different function. See https://react.dev/reference/rules/react-calls-components-and-hooks#dont-dynamically-use-hooks',
@@ -424,7 +428,7 @@ export function validateHooksUsage(
   }
 
   for (const [, error] of errorsByPlace) {
-    errors.push(error);
+    errors.pushErrorDetail(error);
   }
   return errors.asResult();
 }
@@ -448,11 +452,12 @@ function visitFunctionExpression(errors: CompilerError, fn: HIRFunction): void {
           if (hookKind != null) {
             errors.pushErrorDetail(
               new CompilerErrorDetail({
+                category: ErrorCategory.Hooks,
                 severity: ErrorSeverity.InvalidReact,
                 reason:
                   'Hooks must be called at the top level in the body of a function component or custom hook, and may not be called within function expressions. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning)',
                 loc: callee.loc,
-                description: `Cannot call ${hookKind} within a function component`,
+                description: `Cannot call ${hookKind === 'Custom' ? 'hook' : hookKind} within a function expression`,
                 suggestions: null,
               }),
             );
