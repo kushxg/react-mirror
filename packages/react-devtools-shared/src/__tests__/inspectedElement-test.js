@@ -682,6 +682,7 @@ describe('InspectedElement', () => {
           object_with_symbol={objectWithSymbol}
           proxy={proxyInstance}
           react_element={<span />}
+          react_lazy={React.lazy(async () => ({default: 'foo'}))}
           regexp={/abc/giu}
           set={setShallow}
           set_of_sets={setOfSets}
@@ -780,9 +781,18 @@ describe('InspectedElement', () => {
           "preview_short": () => {},
           "preview_long": () => {},
         },
-        "react_element": Dehydrated {
-          "preview_short": <span />,
-          "preview_long": <span />,
+        "react_element": {
+          "key": null,
+          "props": Dehydrated {
+            "preview_short": {…},
+            "preview_long": {},
+          },
+        },
+        "react_lazy": {
+          "_payload": Dehydrated {
+            "preview_short": {…},
+            "preview_long": {_ioInfo: {…}, _result: () => {}, _status: -1},
+          },
         },
         "regexp": Dehydrated {
           "preview_short": /abc/giu,
@@ -930,13 +940,13 @@ describe('InspectedElement', () => {
     const inspectedElement = await inspectElementAtIndex(0);
 
     expect(inspectedElement.props).toMatchInlineSnapshot(`
-    {
-      "unusedPromise": Dehydrated {
-        "preview_short": Promise,
-        "preview_long": Promise,
-      },
-    }
-  `);
+          {
+            "unusedPromise": Dehydrated {
+              "preview_short": Promise,
+              "preview_long": Promise,
+            },
+          }
+      `);
   });
 
   it('should not consume iterables while inspecting', async () => {
@@ -2480,6 +2490,26 @@ describe('InspectedElement', () => {
           "type": [Function],
         }
       `);
+    });
+
+    it('should handle custom hooks named "useState" without crashing', async () => {
+      function useState() {
+        React.useState(0);
+        React.useEffect(() => () => {});
+      }
+
+      function Counter() {
+        useState();
+        React.useState(0);
+        return null;
+      }
+
+      await utils.actAsync(() => render(<Counter />));
+
+      const inspectedElement = await inspectElementAtIndex(0);
+      
+      expect(inspectedElement).not.toBe(null);
+      expect(Array.isArray(inspectedElement.hooks)).toBe(true);
     });
 
     it('should support class components', async () => {

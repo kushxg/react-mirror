@@ -426,6 +426,7 @@ export function attach(
       pushOperation(ownerID);
       pushOperation(displayNameStringID);
       pushOperation(keyStringID);
+      pushOperation(getStringID(null)); // name prop
     }
   }
 
@@ -755,6 +756,10 @@ export function attach(
       inspectedElement.state,
       createIsPathAllowed('state'),
     );
+    inspectedElement.suspendedBy = cleanForBridge(
+      inspectedElement.suspendedBy,
+      createIsPathAllowed('suspendedBy'),
+    );
 
     return {
       id,
@@ -791,6 +796,8 @@ export function attach(
             displayName: getData(owner).displayName || 'Unknown',
             id: getID(owner),
             key: element.key,
+            env: null,
+            stack: null,
             type: getElementType(owner),
           });
           if (owner._currentElement) {
@@ -829,10 +836,11 @@ export function attach(
 
       // Suspense did not exist in legacy versions
       canToggleSuspense: false,
+      isSuspended: null,
 
-      // Can view component source location.
-      canViewSource: type === ElementTypeClass || type === ElementTypeFunction,
       source: null,
+
+      stack: null,
 
       // Only legacy context exists in legacy versions.
       hasLegacyContext: true,
@@ -849,8 +857,14 @@ export function attach(
       errors,
       warnings,
 
+      // Not supported in legacy renderers.
+      suspendedBy: [],
+      suspendedByRange: null,
+
       // List of owners
       owners,
+
+      env: null,
 
       rootType: null,
       rendererPackageName: null,
