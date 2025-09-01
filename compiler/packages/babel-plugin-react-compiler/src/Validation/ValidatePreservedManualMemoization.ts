@@ -5,13 +5,19 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import {CompilerError, ErrorSeverity} from '../CompilerError';
+import {
+  CompilerDiagnostic,
+  CompilerError,
+  ErrorCategory,
+  ErrorSeverity,
+} from '../CompilerError';
 import {
   DeclarationId,
   Effect,
   GeneratedSource,
   Identifier,
   IdentifierId,
+  InstructionId,
   InstructionValue,
   ManualMemoDependency,
   Place,
@@ -104,6 +110,7 @@ type ManualMemoBlockState = {
    */
   depsFromSource: Array<ManualMemoDependency> | null;
   manualMemoId: number;
+  start: InstructionId;
 };
 
 type VisitorState = {
@@ -229,6 +236,8 @@ function validateInferredDep(
   validDepsInMemoBlock: Array<ManualMemoDependency>,
   errorState: CompilerError,
   memoLocation: SourceLocation,
+  memoStartInstruction: InstructionId,
+  scopes: Set<ScopeId>,
 ): void {
   let normalizedDep: ManualMemoDependency;
   const maybeNormalizedRoot = temporaries.get(dep.identifier.id);
@@ -266,6 +275,13 @@ function validateInferredDep(
       return;
     }
   }
+  if (
+    dep.identifier.mutableRange.start > memoStartInstruction &&
+    !isUnmemoized(dep.identifier, scopes)
+  ) {
+    return;
+  }
+
   let errorDiagnostic: CompareDependencyResult | null = null;
   for (const originalDep of validDepsInMemoBlock) {
     const compareResult = compareDeps(normalizedDep, originalDep);
@@ -275,27 +291,38 @@ function validateInferredDep(
       errorDiagnostic = merge(errorDiagnostic ?? compareResult, compareResult);
     }
   }
-  errorState.push({
-    severity: ErrorSeverity.CannotPreserveMemoization,
-    reason:
-      'React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. The inferred dependencies did not match the manually specified dependencies, which could cause the value to change more or less frequently than expected',
-    description:
-      DEBUG ||
-      // If the dependency is a named variable then we can report it. Otherwise only print in debug mode
-      (dep.identifier.name != null && dep.identifier.name.kind === 'named')
-        ? `The inferred dependency was \`${prettyPrintScopeDependency(
-            dep,
-          )}\`, but the source dependencies were [${validDepsInMemoBlock
-            .map(dep => printManualMemoDependency(dep, true))
-            .join(', ')}]. ${
-            errorDiagnostic
-              ? getCompareDependencyResultDescription(errorDiagnostic)
-              : 'Inferred dependency not present in source'
-          }`
-        : null,
-    loc: memoLocation,
-    suggestions: null,
-  });
+  errorState.pushDiagnostic(
+    CompilerDiagnostic.create({
+      category: ErrorCategory.PreserveManualMemo,
+      severity: ErrorSeverity.CannotPreserveMemoization,
+      reason:
+        'Compilation skipped because existing memoization could not be preserved',
+      description: [
+        'React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. ',
+        'The inferred dependencies did not match the manually specified dependencies, which could cause the value to change more or less frequently than expected. ',
+        DEBUG ||
+        // If the dependency is a named variable then we can report it. Otherwise only print in debug mode
+        (dep.identifier.name != null && dep.identifier.name.kind === 'named')
+          ? `The inferred dependency was \`${prettyPrintScopeDependency(
+              dep,
+            )}\`, but the source dependencies were [${validDepsInMemoBlock
+              .map(dep => printManualMemoDependency(dep, true))
+              .join(', ')}]. ${
+              errorDiagnostic
+                ? getCompareDependencyResultDescription(errorDiagnostic)
+                : 'Inferred dependency not present in source'
+            }.`
+          : '',
+      ]
+        .join('')
+        .trim(),
+      suggestions: null,
+    }).withDetail({
+      kind: 'error',
+      loc: memoLocation,
+      message: 'Could not preserve existing manual memoization',
+    }),
+  );
 }
 
 class Visitor extends ReactiveFunctionVisitor<VisitorState> {
@@ -417,6 +444,8 @@ class Visitor extends ReactiveFunctionVisitor<VisitorState> {
           state.manualMemoState.depsFromSource,
           state.errors,
           state.manualMemoState.loc,
+          state.manualMemoState.start,
+          this.scopes,
         );
       }
     }
@@ -445,17 +474,34 @@ class Visitor extends ReactiveFunctionVisitor<VisitorState> {
      */
     this.recordTemporaries(instruction, state);
     const value = instruction.value;
+    // Track reassignments from inlining of manual memo
     if (
       value.kind === 'StoreLocal' &&
       value.lvalue.kind === 'Reassign' &&
       state.manualMemoState != null
     ) {
+      // Complex cases of inlining end up with a temporary that is reassigned
       const ids = getOrInsertDefault(
         state.manualMemoState.reassignments,
         value.lvalue.place.identifier.declarationId,
         new Set(),
       );
       ids.add(value.value.identifier);
+    }
+    if (
+      value.kind === 'LoadLocal' &&
+      value.place.identifier.scope != null &&
+      instruction.lvalue != null &&
+      instruction.lvalue.identifier.scope == null &&
+      state.manualMemoState != null
+    ) {
+      // Simpler cases of inlining assign to the original IIFE lvalue
+      const ids = getOrInsertDefault(
+        state.manualMemoState.reassignments,
+        instruction.lvalue.identifier.declarationId,
+        new Set(),
+      );
+      ids.add(value.place.identifier);
     }
     if (value.kind === 'StartMemoize') {
       let depsFromSource: Array<ManualMemoDependency> | null = null;
@@ -475,6 +521,7 @@ class Visitor extends ReactiveFunctionVisitor<VisitorState> {
         depsFromSource,
         manualMemoId: value.manualMemoId,
         reassignments: new Map(),
+        start: instruction.id,
       };
 
       /**
@@ -502,14 +549,22 @@ class Visitor extends ReactiveFunctionVisitor<VisitorState> {
           !this.scopes.has(identifier.scope.id) &&
           !this.prunedScopes.has(identifier.scope.id)
         ) {
-          state.errors.push({
-            reason:
-              'React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. This dependency may be mutated later, which could cause the value to change unexpectedly',
-            description: null,
-            severity: ErrorSeverity.CannotPreserveMemoization,
-            loc,
-            suggestions: null,
-          });
+          state.errors.pushDiagnostic(
+            CompilerDiagnostic.create({
+              category: ErrorCategory.PreserveManualMemo,
+              severity: ErrorSeverity.CannotPreserveMemoization,
+              reason:
+                'Compilation skipped because existing memoization could not be preserved',
+              description: [
+                'React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. ',
+                'This dependency may be mutated later, which could cause the value to change unexpectedly.',
+              ].join(''),
+            }).withDetail({
+              kind: 'error',
+              loc,
+              message: 'This dependency may be modified later',
+            }),
+          );
         }
       }
     }
@@ -543,16 +598,26 @@ class Visitor extends ReactiveFunctionVisitor<VisitorState> {
 
           for (const identifier of decls) {
             if (isUnmemoized(identifier, this.scopes)) {
-              state.errors.push({
-                reason:
-                  'React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. This value was memoized in source but not in compilation output.',
-                description: DEBUG
-                  ? `${printIdentifier(identifier)} was not memoized`
-                  : null,
-                severity: ErrorSeverity.CannotPreserveMemoization,
-                loc,
-                suggestions: null,
-              });
+              state.errors.pushDiagnostic(
+                CompilerDiagnostic.create({
+                  category: ErrorCategory.PreserveManualMemo,
+                  severity: ErrorSeverity.CannotPreserveMemoization,
+                  reason:
+                    'Compilation skipped because existing memoization could not be preserved',
+                  description: [
+                    'React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. This value was memoized in source but not in compilation output. ',
+                    DEBUG
+                      ? `${printIdentifier(identifier)} was not memoized.`
+                      : '',
+                  ]
+                    .join('')
+                    .trim(),
+                }).withDetail({
+                  kind: 'error',
+                  loc,
+                  message: 'Could not preserve existing memoization',
+                }),
+              );
             }
           }
         }
