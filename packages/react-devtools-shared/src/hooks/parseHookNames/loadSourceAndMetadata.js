@@ -46,7 +46,7 @@
 //       and there is no need to convert runtime code to the original source.
 
 import {__DEBUG__} from 'react-devtools-shared/src/constants';
-import {getHookSourceLocationKey} from 'react-devtools-shared/src/hookNamesCache';
+import {getHookSourceLocationKey} from 'react-devtools-shared/src/hookSourceLocation';
 import {sourceMapIncludesSource} from '../SourceMapUtils';
 import {
   withAsyncPerfMeasurements,
@@ -134,7 +134,7 @@ function decodeBase64String(encoded: string): Object {
 
 function extractAndLoadSourceMapJSON(
   locationKeyToHookSourceAndMetadata: LocationKeyToHookSourceAndMetadata,
-): Promise<Array<$Call<<T>(p: Promise<T> | T) => T, Promise<void>>>> {
+): Promise<mixed> {
   // Deduplicate fetches, since there can be multiple location keys per source map.
   const dedupedFetchPromises = new Map<string, Promise<$FlowFixMe>>();
 
@@ -461,7 +461,7 @@ function isUnnamedBuiltInHook(hook: HooksNode) {
 function loadSourceFiles(
   locationKeyToHookSourceAndMetadata: LocationKeyToHookSourceAndMetadata,
   fetchFileWithCaching: FetchFileWithCaching | null,
-): Promise<Array<$Call<<T>(p: Promise<T> | T) => T, Promise<void>>>> {
+): Promise<mixed> {
   // Deduplicate fetches, since there can be multiple location keys per file.
   const dedupedFetchPromises = new Map<string, Promise<$FlowFixMe>>();
 
