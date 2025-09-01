@@ -38,9 +38,15 @@ import hasOwnProperty from 'shared/hasOwnProperty';
 import {checkAttributeStringCoercion} from 'shared/CheckStringCoercion';
 import {REACT_CONTEXT_TYPE} from 'shared/ReactSymbols';
 import {
-  isFiberContainedBy,
+  isFiberContainedByFragment,
   isFiberFollowing,
   isFiberPreceding,
+  isFragmentContainedByFiber,
+  traverseFragmentInstance,
+  getFragmentParentHostFiber,
+  getInstanceFromHostFiber,
+  traverseFragmentInstanceDeeply,
+  fiberIsPortaledIntoHost,
 } from 'react-reconciler/src/ReactFiberTreeReflection';
 
 export {
@@ -63,13 +69,7 @@ import {
   markNodeAsHoistable,
   isOwnedInstance,
 } from './ReactDOMComponentTree';
-import {
-  traverseFragmentInstance,
-  getFragmentParentHostFiber,
-  getNextSiblingHostFiber,
-  getInstanceFromHostFiber,
-  traverseFragmentInstanceDeeply,
-} from 'react-reconciler/src/ReactFiberTreeReflection';
+import {compareDocumentPositionForEmptyFragment} from 'shared/ReactDOMFragmentRefShared';
 
 export {detachDeletedInstance};
 import {hasRole} from './DOMAccessibilityRoles';
@@ -242,10 +242,10 @@ export type TransitionStatus = FormStatus;
 
 export type ViewTransitionInstance = {
   name: string,
-  group: Animatable,
-  imagePair: Animatable,
-  old: Animatable,
-  new: Animatable,
+  group: mixin$Animatable,
+  imagePair: mixin$Animatable,
+  old: mixin$Animatable,
+  new: mixin$Animatable,
 };
 
 type SelectionInformation = {
@@ -746,7 +746,7 @@ export const scheduleTimeout: any =
   typeof setTimeout === 'function' ? setTimeout : (undefined: any);
 export const cancelTimeout: any =
   typeof clearTimeout === 'function' ? clearTimeout : (undefined: any);
-export const noTimeout = -1;
+export const noTimeout: -1 = -1;
 const localPromise = typeof Promise === 'function' ? Promise : undefined;
 const localRequestAnimationFrame =
   typeof requestAnimationFrame === 'function'
@@ -1430,7 +1430,10 @@ export function applyViewTransitionName(
     // simple case by converting it automatically to display: inline-block.
     // https://bugs.webkit.org/show_bug.cgi?id=290923
     const rects = instance.getClientRects();
-    if (countClientRects(rects) === 1) {
+    if (
+      // $FlowFixMe[incompatible-call]
+      countClientRects(rects) === 1
+    ) {
       // If the instance has a single client rect, that means that it can be
       // expressed as a display: inline-block or block.
       // This will cause layout thrash but we live with it since inline view transitions
@@ -1535,6 +1538,7 @@ export function cancelViewTransitionName(
   if (documentElement !== null) {
     documentElement.animate(
       {opacity: [0, 0], pointerEvents: ['none', 'none']},
+      // $FlowFixMe[incompatible-call]
       {
         duration: 0,
         fill: 'forwards',
@@ -1549,6 +1553,19 @@ export function cancelRootViewTransitionName(rootContainer: Container): void {
     rootContainer.nodeType === DOCUMENT_NODE
       ? (rootContainer: any).documentElement
       : rootContainer.ownerDocument.documentElement;
+
+  if (
+    !disableCommentsAsDOMContainers &&
+    rootContainer.nodeType === COMMENT_NODE
+  ) {
+    if (__DEV__) {
+      console.warn(
+        'Cannot cancel root view transition on a comment node. All view transitions will be globally scoped.',
+      );
+    }
+    return;
+  }
+
   if (
     documentElement !== null &&
     // $FlowFixMe[prop-missing]
@@ -1558,6 +1575,7 @@ export function cancelRootViewTransitionName(rootContainer: Container): void {
     documentElement.style.viewTransitionName = 'none';
     documentElement.animate(
       {opacity: [0, 0], pointerEvents: ['none', 'none']},
+      // $FlowFixMe[incompatible-call]
       {
         duration: 0,
         fill: 'forwards',
@@ -1573,6 +1591,7 @@ export function cancelRootViewTransitionName(rootContainer: Container): void {
     // whatever is below the animation.
     documentElement.animate(
       {width: [0, 0], height: [0, 0]},
+      // $FlowFixMe[incompatible-call]
       {
         duration: 0,
         fill: 'forwards',
@@ -1593,8 +1612,16 @@ export function restoreRootViewTransitionName(rootContainer: Container): void {
     // clone the whole document outside of the React too.
     containerInstance = (rootContainer: any);
   }
-  // $FlowFixMe[prop-missing]
-  if (containerInstance.style.viewTransitionName === 'root') {
+  if (
+    !disableCommentsAsDOMContainers &&
+    containerInstance.nodeType === COMMENT_NODE
+  ) {
+    return;
+  }
+  if (
+    // $FlowFixMe[prop-missing]
+    containerInstance.style.viewTransitionName === 'root'
+  ) {
     // If we moved the root view transition name to the container in a gesture
     // we need to restore it now.
     containerInstance.style.viewTransitionName = '';
@@ -1708,6 +1735,13 @@ export function cloneRootViewTransitionContainer(
     containerInstance = (rootContainer: any).body;
   } else if (rootContainer.nodeName === 'HTML') {
     containerInstance = (rootContainer.ownerDocument.body: any);
+  } else if (
+    !disableCommentsAsDOMContainers &&
+    rootContainer.nodeType === COMMENT_NODE
+  ) {
+    throw new Error(
+      'Cannot use a startGestureTransition() with a comment node root.',
+    );
   } else {
     // If the container is not the whole document, then we ideally should probably
     // clone the whole document outside of the React too.
@@ -1942,6 +1976,7 @@ export function hasInstanceAffectedParent(
 function cancelAllViewTransitionAnimations(scope: Element) {
   // In Safari, we need to manually cancel all manually start animations
   // or it'll block or interfer with future transitions.
+  // $FlowFixMe[prop-missing]
   const animations = scope.getAnimations({subtree: true});
   for (let i = 0; i < animations.length; i++) {
     const anim = animations[i];
@@ -2105,6 +2140,85 @@ export function startViewTransition(
     });
     // $FlowFixMe[prop-missing]
     ownerDocument.__reactViewTransition = transition;
+
+    const readyCallback = () => {
+      const documentElement: Element = (ownerDocument.documentElement: any);
+      // Loop through all View Transition Animations.
+      // $FlowFixMe[prop-missing]
+      const animations = documentElement.getAnimations({subtree: true});
+      for (let i = 0; i < animations.length; i++) {
+        const animation = animations[i];
+        const effect: KeyframeEffect = (animation.effect: any);
+        // $FlowFixMe
+        const pseudoElement: ?string = effect.pseudoElement;
+        if (
+          pseudoElement != null &&
+          pseudoElement.startsWith('::view-transition')
+        ) {
+          const keyframes = effect.getKeyframes();
+          // Next, we're going to try to optimize this animation in case the auto-generated
+          // width/height keyframes are unnecessary.
+          let width;
+          let height;
+          let unchangedDimensions = true;
+          for (let j = 0; j < keyframes.length; j++) {
+            const keyframe = keyframes[j];
+            const w = keyframe.width;
+            if (width === undefined) {
+              width = w;
+            } else if (width !== w) {
+              unchangedDimensions = false;
+              break;
+            }
+            const h = keyframe.height;
+            if (height === undefined) {
+              height = h;
+            } else if (height !== h) {
+              unchangedDimensions = false;
+              break;
+            }
+            // We're clearing the keyframes in case we are going to apply the optimization.
+            delete keyframe.width;
+            delete keyframe.height;
+            if (keyframe.transform === 'none') {
+              delete keyframe.transform;
+            }
+          }
+          if (
+            unchangedDimensions &&
+            width !== undefined &&
+            height !== undefined
+          ) {
+            // Replace the keyframes with ones that don't animate the width/height.
+            // $FlowFixMe
+            effect.setKeyframes(keyframes);
+            // Read back the new animation to see what the underlying width/height of the pseudo-element was.
+            const computedStyle = getComputedStyle(
+              // $FlowFixMe
+              effect.target,
+              // $FlowFixMe
+              effect.pseudoElement,
+            );
+            if (
+              computedStyle.width !== width ||
+              computedStyle.height !== height
+            ) {
+              // Oops. Turns out that the pseudo-element had a different width/height so we need to let it
+              // be overridden. Add it back.
+              const first = keyframes[0];
+              first.width = width;
+              first.height = height;
+              const last = keyframes[keyframes.length - 1];
+              last.width = width;
+              last.height = height;
+              // $FlowFixMe
+              effect.setKeyframes(keyframes);
+            }
+          }
+        }
+      }
+      spawnedWorkCallback();
+    };
     const handleError = (error: mixed) => {
       try {
         error = customizeViewTransitionError(error, false);
@@ -2122,7 +2236,7 @@ export function startViewTransition(
         spawnedWorkCallback();
       }
     };
-    transition.ready.then(spawnedWorkCallback, handleError);
+    transition.ready.then(readyCallback, handleError);
     transition.finished.finally(() => {
       cancelAllViewTransitionAnimations((ownerDocument.documentElement: any));
       // $FlowFixMe[prop-missing]
@@ -2160,6 +2274,7 @@ function mergeTranslate(translateA: ?string, translateB: ?string): string {
     return translateB || '';
   }
   if (!translateB || translateB === 'none') {
+    // $FlowFixMe[constant-condition]
     return translateA || '';
   }
   const partsA = translateA.split(' ');
@@ -2185,17 +2300,33 @@ function animateGesture(
   keyframes: any,
   targetElement: Element,
   pseudoElement: string,
-  timeline: AnimationTimeline,
+  timeline: GestureTimeline,
+  customTimelineCleanup: Array<() => void>,
   rangeStart: number,
   rangeEnd: number,
   moveFirstFrameIntoViewport: boolean,
   moveAllFramesIntoViewport: boolean,
 ) {
+  let width;
+  let height;
+  let unchangedDimensions = true;
   for (let i = 0; i < keyframes.length; i++) {
     const keyframe = keyframes[i];
     // Delete any easing since we always apply linear easing to gestures.
     delete keyframe.easing;
     delete keyframe.computedOffset;
+    const w = keyframe.width;
+    if (width === undefined) {
+      width = w;
+    } else if (width !== w) {
+      unchangedDimensions = false;
+    }
+    const h = keyframe.height;
+    if (height === undefined) {
+      height = h;
+    } else if (height !== h) {
+      unchangedDimensions = false;
+    }
     // Chrome returns "auto" for width/height which is not a valid value to
     // animate to. Similarly, transform: "none" is actually lack of transform.
     if (keyframe.width === 'auto') {
@@ -2244,26 +2375,66 @@ function animateGesture(
     // keyframe. Otherwise it applies to every keyframe.
     moveOldFrameIntoViewport(keyframes[0]);
   }
+  if (unchangedDimensions && width !== undefined && height !== undefined) {
+    // Read the underlying width/height of the pseudo-element. The previous animation
+    // should have already been cancelled so we should observe the underlying element.
+    const computedStyle = getComputedStyle(targetElement, pseudoElement);
+    if (computedStyle.width === width && computedStyle.height === height) {
+      for (let i = 0; i < keyframes.length; i++) {
+        const keyframe = keyframes[i];
+        delete keyframe.width;
+        delete keyframe.height;
+      }
+    }
+  }
+
   // TODO: Reverse the reverse if the original direction is reverse.
   const reverse = rangeStart > rangeEnd;
-  targetElement.animate(keyframes, {
-    pseudoElement: pseudoElement,
-    // Set the timeline to the current gesture timeline to drive the updates.
-    timeline: timeline,
-    // We reset all easing functions to linear so that it feels like you
-    // have direct impact on the transition and to avoid double bouncing
-    // from scroll bouncing.
-    easing: 'linear',
-    // We fill in both direction for overscroll.
-    fill: 'both', // TODO: Should we preserve the fill instead?
-    // We play all gestures in reverse, except if we're in reverse direction
-    // in which case we need to play it in reverse of the reverse.
-    direction: reverse ? 'normal' : 'reverse',
-    // Range start needs to be higher than range end. If it goes in reverse
-    // we reverse the whole animation below.
-    rangeStart: (reverse ? rangeEnd : rangeStart) + '%',
-    rangeEnd: (reverse ? rangeStart : rangeEnd) + '%',
-  });
+  if (timeline instanceof AnimationTimeline) {
+    // Native Timeline
+    // $FlowFixMe[incompatible-call]
+    targetElement.animate(keyframes, {
+      pseudoElement: pseudoElement,
+      // Set the timeline to the current gesture timeline to drive the updates.
+      timeline: timeline,
+      // We reset all easing functions to linear so that it feels like you
+      // have direct impact on the transition and to avoid double bouncing
+      // from scroll bouncing.
+      easing: 'linear',
+      // We fill in both direction for overscroll.
+      fill: 'both', // TODO: Should we preserve the fill instead?
+      // We play all gestures in reverse, except if we're in reverse direction
+      // in which case we need to play it in reverse of the reverse.
+      direction: reverse ? 'normal' : 'reverse',
+      // Range start needs to be higher than range end. If it goes in reverse
+      // we reverse the whole animation below.
+      rangeStart: (reverse ? rangeEnd : rangeStart) + '%',
+      rangeEnd: (reverse ? rangeStart : rangeEnd) + '%',
+    });
+  } else {
+    // Custom Timeline
+    // $FlowFixMe[incompatible-call]
+    const animation = targetElement.animate(keyframes, {
+      pseudoElement: pseudoElement,
+      // We reset all easing functions to linear so that it feels like you
+      // have direct impact on the transition and to avoid double bouncing
+      // from scroll bouncing.
+      easing: 'linear',
+      // We fill in both direction for overscroll.
+      fill: 'both', // TODO: Should we preserve the fill instead?
+      // We play all gestures in reverse, except if we're in reverse direction
+      // in which case we need to play it in reverse of the reverse.
+      direction: reverse ? 'normal' : 'reverse',
+      // We set the delay and duration to represent the span of the range.
+      delay: reverse ? rangeEnd : rangeStart,
+      duration: reverse ? rangeStart - rangeEnd : rangeEnd - rangeStart,
+    });
+    // Let the custom timeline take control of driving the animation.
+    const cleanup = timeline.animate(animation);
+    if (cleanup) {
+      customTimelineCleanup.push(cleanup);
+    }
+  }
 }
 
 export function startGestureTransition(
@@ -2292,9 +2463,11 @@ export function startGestureTransition(
     });
     // $FlowFixMe[prop-missing]
     ownerDocument.__reactViewTransition = transition;
+    const customTimelineCleanup: Array<() => void> = []; // Cleanup Animations started in a CustomTimeline
     const readyCallback = () => {
       const documentElement: Element = (ownerDocument.documentElement: any);
       // Loop through all View Transition Animations.
+      // $FlowFixMe[prop-missing]
       const animations = documentElement.getAnimations({subtree: true});
       // First do a pass to collect all known group and new items so we can look
       // up if they exist later.
@@ -2310,8 +2483,11 @@ export function startGestureTransition(
         } else if (pseudoElement.startsWith('::view-transition')) {
           const timing = effect.getTiming();
           const duration =
+            // $FlowFixMe[prop-missing]
             typeof timing.duration === 'number' ? timing.duration : 0;
           // TODO: Consider interation count higher than 1.
+          // $FlowFixMe[prop-missing]
+          // $FlowFixMe[unsafe-addition]
           const durationWithDelay = timing.delay + duration;
           if (durationWithDelay > longestDuration) {
             longestDuration = durationWithDelay;
@@ -2371,11 +2547,17 @@ export function startGestureTransition(
           // therefore the timing is from the rangeEnd to the start.
           const timing = effect.getTiming();
           const duration =
+            // $FlowFixMe[prop-missing]
             typeof timing.duration === 'number' ? timing.duration : 0;
           let adjustedRangeStart =
+            // $FlowFixMe[unsafe-addition]
+            // $FlowFixMe[prop-missing]
             rangeEnd - (duration + timing.delay) * durationToRangeMultipler;
           let adjustedRangeEnd =
-            rangeEnd - timing.delay * durationToRangeMultipler;
+            rangeEnd -
+            // $FlowFixMe[prop-missing]
+            // $FlowFixMe[unsafe-arithmetic]
+            timing.delay * durationToRangeMultipler;
           if (
             timing.direction === 'reverse' ||
             timing.direction === 'alternate-reverse'
@@ -2391,6 +2573,7 @@ export function startGestureTransition(
             effect.target,
             pseudoElement,
             timeline,
+            customTimelineCleanup,
             adjustedRangeStart,
             adjustedRangeEnd,
             isGeneratedGroupAnim,
@@ -2417,6 +2600,7 @@ export function startGestureTransition(
                 effect.target,
                 pseudoElementName,
                 timeline,
+                customTimelineCleanup,
                 rangeStart,
                 rangeEnd,
                 false,
@@ -2431,6 +2615,7 @@ export function startGestureTransition(
       // you can swipe back again. We can prevent this by adding a paused Animation
       // that never stops. This seems to keep all running Animations alive until
       // we explicitly abort (or something forces the View Transition to cancel).
+      // $FlowFixMe[incompatible-call]
       const blockingAnim = documentElement.animate([{}, {}], {
         pseudoElement: '::view-transition',
         duration: 1,
@@ -2466,6 +2651,10 @@ export function startGestureTransition(
     transition.ready.then(readyForAnimations, handleError);
     transition.finished.finally(() => {
       cancelAllViewTransitionAnimations((ownerDocument.documentElement: any));
+      for (let i = 0; i < customTimelineCleanup.length; i++) {
+        const cleanup = customTimelineCleanup[i];
+        cleanup();
+      }
       // $FlowFixMe[prop-missing]
       if (ownerDocument.__reactViewTransition === transition) {
         // $FlowFixMe[prop-missing]
@@ -2491,7 +2680,7 @@ export function stopViewTransition(transition: RunningViewTransition) {
   transition.skipTransition();
 }
 
-interface ViewTransitionPseudoElementType extends Animatable {
+interface ViewTransitionPseudoElementType extends mixin$Animatable {
   _scope: HTMLElement;
   _selector: string;
   getComputedStyle(): CSSStyleDeclaration;
@@ -2517,7 +2706,11 @@ ViewTransitionPseudoElement.prototype.animate = function (
       ? {
           duration: options,
         }
-      : Object.assign(({}: KeyframeAnimationOptions), options);
+      : Object.assign(
+          (// $FlowFixMe[prop-missing]
+          {}: KeyframeAnimationOptions),
+          options,
+        );
   opts.pseudoElement = this._selector;
   // TODO: Handle multiple child instances.
   return this._scope.animate(keyframes, opts);
@@ -2529,7 +2722,10 @@ ViewTransitionPseudoElement.prototype.getAnimations = function (
 ): Animation[] {
   const scope = this._scope;
   const selector = this._selector;
-  const animations = scope.getAnimations({subtree: true});
+  const animations = scope.getAnimations(
+    // $FlowFixMe[prop-missing]
+    {subtree: true},
+  );
   const result = [];
   for (let i = 0; i < animations.length; i++) {
     const effect: null | {
@@ -2569,10 +2765,15 @@ export function createViewTransitionInstance(
   };
 }
 
-export type GestureTimeline = AnimationTimeline; // TODO: More provider types.
+interface CustomTimeline {
+  currentTime: number;
+  animate(animation: Animation): void | (() => void);
+}
 
-export function getCurrentGestureOffset(provider: GestureTimeline): number {
-  const time = provider.currentTime;
+export type GestureTimeline = AnimationTimeline | CustomTimeline;
+
+export function getCurrentGestureOffset(timeline: GestureTimeline): number {
+  const time = timeline.currentTime;
   if (time === null) {
     throw new Error(
       'Cannot start a gesture with a disconnected AnimationTimeline.',
@@ -2819,7 +3020,8 @@ FragmentInstance.prototype.unobserveUsing = function (
   this: FragmentInstanceType,
   observer: IntersectionObserver | ResizeObserver,
 ): void {
-  if (this._observers === null || !this._observers.has(observer)) {
+  const observers = this._observers;
+  if (observers === null || !observers.has(observer)) {
     if (__DEV__) {
       console.error(
         'You are calling unobserveUsing() with an observer that is not being observed with this fragment ' +
@@ -2827,7 +3029,7 @@ FragmentInstance.prototype.unobserveUsing = function (
       );
     }
   } else {
-    this._observers.delete(observer);
+    observers.delete(observer);
     traverseFragmentInstance(this._fragmentFiber, unobserveChild, observer);
   }
 };
@@ -2880,58 +3082,71 @@ FragmentInstance.prototype.compareDocumentPosition = function (
   }
   const children: Array<Fiber> = [];
   traverseFragmentInstance(this._fragmentFiber, collectChildren, children);
+  const parentHostInstance =
+    getInstanceFromHostFiber<Instance>(parentHostFiber);
 
-  let result = Node.DOCUMENT_POSITION_DISCONNECTED;
   if (children.length === 0) {
-    // If the fragment has no children, we can use the parent and
-    // siblings to determine a position.
-    const parentHostInstance =
-      getInstanceFromHostFiber<Instance>(parentHostFiber);
-    const parentResult = parentHostInstance.compareDocumentPosition(otherNode);
-    result = parentResult;
-    if (parentHostInstance === otherNode) {
-      result = Node.DOCUMENT_POSITION_CONTAINS;
-    } else {
-      if (parentResult & Node.DOCUMENT_POSITION_CONTAINED_BY) {
-        // otherNode is one of the fragment's siblings. Use the next
-        // sibling to determine if its preceding or following.
-        const nextSiblingFiber = getNextSiblingHostFiber(this._fragmentFiber);
-        if (nextSiblingFiber === null) {
-          result = Node.DOCUMENT_POSITION_PRECEDING;
-        } else {
-          const nextSiblingInstance =
-            getInstanceFromHostFiber<Instance>(nextSiblingFiber);
-          const nextSiblingResult =
-            nextSiblingInstance.compareDocumentPosition(otherNode);
-          if (
-            nextSiblingResult === 0 ||
-            nextSiblingResult & Node.DOCUMENT_POSITION_FOLLOWING
-          ) {
-            result = Node.DOCUMENT_POSITION_FOLLOWING;
-          } else {
-            result = Node.DOCUMENT_POSITION_PRECEDING;
-          }
-        }
-      }
-    }
-
-    result |= Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC;
-    return result;
+    return compareDocumentPositionForEmptyFragment(
+      this._fragmentFiber,
+      parentHostInstance,
+      otherNode,
+      getInstanceFromHostFiber,
+    );
   }
 
   const firstElement = getInstanceFromHostFiber<Instance>(children[0]);
   const lastElement = getInstanceFromHostFiber<Instance>(
     children[children.length - 1],
   );
+
+  // If the fragment has been portaled into another host instance, we need to
+  // our best guess is to use the parent of the child instance, rather than
+  // the fiber tree host parent.
+  const firstInstance = getInstanceFromHostFiber<Instance>(children[0]);
+  const parentHostInstanceFromDOM = fiberIsPortaledIntoHost(this._fragmentFiber)
+    ? (firstInstance.parentElement: ?Instance)
+    : parentHostInstance;
+
+  if (parentHostInstanceFromDOM == null) {
+    return Node.DOCUMENT_POSITION_DISCONNECTED;
+  }
+
+  // Check if first and last element are actually in the expected document position
+  // before relying on them as source of truth for other contained elements
+  const firstElementIsContained =
+    parentHostInstanceFromDOM.compareDocumentPosition(firstElement) &
+    Node.DOCUMENT_POSITION_CONTAINED_BY;
+  const lastElementIsContained =
+    parentHostInstanceFromDOM.compareDocumentPosition(lastElement) &
+    Node.DOCUMENT_POSITION_CONTAINED_BY;
   const firstResult = firstElement.compareDocumentPosition(otherNode);
   const lastResult = lastElement.compareDocumentPosition(otherNode);
+
+  const otherNodeIsFirstOrLastChild =
+    (firstElementIsContained && firstElement === otherNode) ||
+    (lastElementIsContained && lastElement === otherNode);
+  const otherNodeIsFirstOrLastChildDisconnected =
+    (!firstElementIsContained && firstElement === otherNode) ||
+    (!lastElementIsContained && lastElement === otherNode);
+  const otherNodeIsWithinFirstOrLastChild =
+    firstResult & Node.DOCUMENT_POSITION_CONTAINED_BY ||
+    lastResult & Node.DOCUMENT_POSITION_CONTAINED_BY;
+  const otherNodeIsBetweenFirstAndLastChildren =
+    firstElementIsContained &&
+    lastElementIsContained &&
+    firstResult & Node.DOCUMENT_POSITION_FOLLOWING &&
+    lastResult & Node.DOCUMENT_POSITION_PRECEDING;
+
+  let result = Node.DOCUMENT_POSITION_DISCONNECTED;
   if (
-    (firstResult & Node.DOCUMENT_POSITION_FOLLOWING &&
-      lastResult & Node.DOCUMENT_POSITION_PRECEDING) ||
-    otherNode === firstElement ||
-    otherNode === lastElement
+    otherNodeIsFirstOrLastChild ||
+    otherNodeIsWithinFirstOrLastChild ||
+    otherNodeIsBetweenFirstAndLastChildren
   ) {
     result = Node.DOCUMENT_POSITION_CONTAINED_BY;
+  } else if (otherNodeIsFirstOrLastChildDisconnected) {
+    // otherNode has been portaled into another container
+    result = Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC;
   } else {
     result = firstResult;
   }
@@ -2969,7 +3184,9 @@ function validateDocumentPositionWithFiberTree(
 ): boolean {
   const otherFiber = getClosestInstanceFromNode(otherNode);
   if (documentPosition & Node.DOCUMENT_POSITION_CONTAINED_BY) {
-    return !!otherFiber && isFiberContainedBy(fragmentFiber, otherFiber);
+    return (
+      !!otherFiber && isFiberContainedByFragment(otherFiber, fragmentFiber)
+    );
   }
   if (documentPosition & Node.DOCUMENT_POSITION_CONTAINS) {
     if (otherFiber === null) {
@@ -2977,7 +3194,7 @@ function validateDocumentPositionWithFiberTree(
       const ownerDocument = otherNode.ownerDocument;
       return otherNode === ownerDocument || otherNode === ownerDocument.body;
     }
-    return isFiberContainedBy(otherFiber, fragmentFiber);
+    return isFragmentContainedByFiber(fragmentFiber, otherFiber);
   }
   if (documentPosition & Node.DOCUMENT_POSITION_PRECEDING) {
     return (
@@ -3045,19 +3262,19 @@ export function updateFragmentInstanceFiber(
 }
 
 export function commitNewChildToFragmentInstance(
-  childElement: Instance,
+  childInstance: Instance,
   fragmentInstance: FragmentInstanceType,
 ): void {
   const eventListeners = fragmentInstance._eventListeners;
   if (eventListeners !== null) {
     for (let i = 0; i < eventListeners.length; i++) {
       const {type, listener, optionsOrUseCapture} = eventListeners[i];
-      childElement.addEventListener(type, listener, optionsOrUseCapture);
+      childInstance.addEventListener(type, listener, optionsOrUseCapture);
     }
   }
   if (fragmentInstance._observers !== null) {
     fragmentInstance._observers.forEach(observer => {
-      observer.observe(childElement);
+      observer.observe(childInstance);
     });
   }
 }
@@ -5147,6 +5364,7 @@ function insertStylesheet(
   let prior = last;
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
+    // $FlowFixMe[prop-missing]
     const nodePrecedence = node.dataset.precedence;
     if (nodePrecedence === precedence) {
       prior = node;
@@ -5922,7 +6140,11 @@ function insertStylesheetIntoRoot(
         // and will be hoisted by the Fizz runtime imminently.
         node.getAttribute('media') !== 'not all'
       ) {
-        precedences.set(node.dataset.precedence, node);
+        precedences.set(
+          // $FlowFixMe[prop-missing]
+          node.dataset.precedence,
+          node,
+        );
         last = node;
       }
     }

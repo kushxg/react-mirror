@@ -26,6 +26,7 @@ type ResultPosition = {
   line: number,
   sourceContent: string | null,
   sourceURL: string | null,
+  ignored: boolean,
 };
 
 export type SourceMapConsumerType = {
@@ -117,12 +118,15 @@ function BasicSourceMapConsumer(sourceMapJSON: BasicSourceMap) {
     const sourceURL = sourceMapJSON.sources[sourceIndex] ?? null;
     const line = nearestEntry[2] + 1;
     const column = nearestEntry[3];
-
+    const ignored =
+      sourceMapJSON.ignoreList != null &&
+      sourceMapJSON.ignoreList.includes(sourceIndex);
     return {
       column,
       line,
       sourceContent: ((sourceContent: any): string | null),
       sourceURL: ((sourceURL: any): string | null),
+      ignored,
     };
   }
 
@@ -141,13 +145,21 @@ type Section = {
 };
 
 function IndexedSourceMapConsumer(sourceMapJSON: IndexSourceMap) {
-  let lastOffset = {
+  let lastOffset: {
+    line: number,
+    column: number,
+    ...
+  } = {
     line: -1,
     column: 0,
   };
 
   const sections: Array<Section> = sourceMapJSON.sections.map(section => {
-    const offset = section.offset;
+    const offset: {
+      line: number,
+      column: number,
+      ...
+    } = section.offset;
     const offsetLine = offset.line;
     const offsetColumn = offset.column;
 
