@@ -19,14 +19,12 @@ import {
   REACT_MEMO_TYPE,
   REACT_PORTAL_TYPE,
   REACT_PROFILER_TYPE,
-  REACT_PROVIDER_TYPE,
   REACT_STRICT_MODE_TYPE,
   REACT_SUSPENSE_LIST_TYPE,
   REACT_SUSPENSE_TYPE,
   REACT_TRACING_MARKER_TYPE,
   REACT_VIEW_TRANSITION_TYPE,
 } from 'shared/ReactSymbols';
-import {enableRenderableContext} from 'shared/ReactFeatureFlags';
 import {
   TREE_OPERATION_ADD,
   TREE_OPERATION_REMOVE,
@@ -37,9 +35,14 @@ import {
   TREE_OPERATION_UPDATE_TREE_BASE_DURATION,
   LOCAL_STORAGE_COMPONENT_FILTER_PREFERENCES_KEY,
   LOCAL_STORAGE_OPEN_IN_EDITOR_URL,
+  LOCAL_STORAGE_OPEN_IN_EDITOR_URL_PRESET,
+  LOCAL_STORAGE_ALWAYS_OPEN_IN_EDITOR,
   SESSION_STORAGE_RELOAD_AND_PROFILE_KEY,
   SESSION_STORAGE_RECORD_CHANGE_DESCRIPTIONS_KEY,
   SESSION_STORAGE_RECORD_TIMELINE_KEY,
+  SUSPENSE_TREE_OPERATION_ADD,
+  SUSPENSE_TREE_OPERATION_REMOVE,
+  SUSPENSE_TREE_OPERATION_REORDER_CHILDREN,
 } from './constants';
 import {
   ComponentFilterElementType,
@@ -86,6 +89,9 @@ const cachedDisplayNames: WeakMap<Function, string> = new WeakMap();
 const encodedStringCache: LRUCache<string, Array<number>> = new LRU({
   max: 1000,
 });
+
+// Previously, the type of `Context.Provider`.
+const LEGACY_REACT_PROVIDER_TYPE: symbol = Symbol.for('react.provider');
 
 export function alphaSortKeys(
   a: string | number | symbol,
@@ -265,6 +271,7 @@ export function printOperationsArray(operations: Array<number>) {
           i++;
 
           i++; // key
+          i++; // name
 
           logs.push(
             `Add node ${id} (${displayName || 'null'}) as child of ${parentID}`,
@@ -315,7 +322,7 @@ export function printOperationsArray(operations: Array<number>) {
         // The profiler UI uses them lazily in order to generate the tree.
         i += 3;
         break;
-      case TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS:
+      case TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS: {
         const id = operations[i + 1];
         const numErrors = operations[i + 2];
         const numWarnings = operations[i + 3];
@@ -326,6 +333,45 @@ export function printOperationsArray(operations: Array<number>) {
           `Node ${id} has ${numErrors} errors and ${numWarnings} warnings`,
         );
         break;
+      }
+      case SUSPENSE_TREE_OPERATION_ADD: {
+        const fiberID = operations[i + 1];
+        const parentID = operations[i + 2];
+        const nameStringID = operations[i + 3];
+        const name = stringTable[nameStringID];
+
+        i += 4;
+
+        logs.push(
+          `Add suspense node ${fiberID} (${String(name)}) under ${parentID}`,
+        );
+        break;
+      }
+      case SUSPENSE_TREE_OPERATION_REMOVE: {
+        const removeLength = ((operations[i + 1]: any): number);
+        i += 2;
+
+        for (let removeIndex = 0; removeIndex < removeLength; removeIndex++) {
+          const id = ((operations[i]: any): number);
+          i += 1;
+
+          logs.push(`Remove suspense node ${id}`);
+        }
+
+        break;
+      }
+      case SUSPENSE_TREE_OPERATION_REORDER_CHILDREN: {
+        const id = ((operations[i + 1]: any): number);
+        const numChildren = ((operations[i + 2]: any): number);
+        i += 3;
+        const children = operations.slice(i, i + numChildren);
+        i += numChildren;
+
+        logs.push(
+          `Re-order suspense node ${id} children ${children.join(',')}`,
+        );
+        break;
+      }
       default:
         throw Error(`Unsupported Bridge operation "${operation}"`);
     }
@@ -383,20 +429,41 @@ export function filterOutLocationComponentFilters(
   return componentFilters.filter(f => f.type !== ComponentFilterLocation);
 }
 
+const vscodeFilepath = 'vscode://file/{path}:{line}:{column}';
+
+export function getDefaultPreset(): 'custom' | 'vscode' {
+  return typeof process.env.EDITOR_URL === 'string' ? 'custom' : 'vscode';
+}
+
 export function getDefaultOpenInEditorURL(): string {
   return typeof process.env.EDITOR_URL === 'string'
     ? process.env.EDITOR_URL
-    : '';
+    : vscodeFilepath;
 }
 
 export function getOpenInEditorURL(): string {
   try {
+    const rawPreset = localStorageGetItem(
+      LOCAL_STORAGE_OPEN_IN_EDITOR_URL_PRESET,
+    );
+    switch (rawPreset) {
+      case '"vscode"':
+        return vscodeFilepath;
+    }
     const raw = localStorageGetItem(LOCAL_STORAGE_OPEN_IN_EDITOR_URL);
     if (raw != null) {
       return JSON.parse(raw);
     }
   } catch (error) {}
   return getDefaultOpenInEditorURL();
+}
+
+export function getAlwaysOpenInEditor(): boolean {
+  try {
+    const raw = localStorageGetItem(LOCAL_STORAGE_ALWAYS_OPEN_IN_EDITOR);
+    return raw === 'true';
+  } catch (error) {}
+  return false;
 }
 
 type ParseElementDisplayNameFromBackendReturn = {
@@ -567,6 +634,7 @@ export type DataType =
   | 'thenable'
   | 'object'
   | 'react_element'
+  | 'react_lazy'
   | 'regexp'
   | 'string'
   | 'symbol'
@@ -620,11 +688,12 @@ export function getDataType(data: Object): DataType {
         return 'number';
       }
     case 'object':
-      if (
-        data.$$typeof === REACT_ELEMENT_TYPE ||
-        data.$$typeof === REACT_LEGACY_ELEMENT_TYPE
-      ) {
-        return 'react_element';
+      switch (data.$$typeof) {
+        case REACT_ELEMENT_TYPE:
+        case REACT_LEGACY_ELEMENT_TYPE:
+          return 'react_element';
+        case REACT_LAZY_TYPE:
+          return 'react_lazy';
       }
       if (isArray(data)) {
         return 'array';
@@ -712,14 +781,7 @@ function typeOfWithLegacyElementSymbol(object: any): mixed {
               case REACT_MEMO_TYPE:
                 return $$typeofType;
               case REACT_CONSUMER_TYPE:
-                if (enableRenderableContext) {
-                  return $$typeofType;
-                }
-              // Fall through
-              case REACT_PROVIDER_TYPE:
-                if (!enableRenderableContext) {
-                  return $$typeofType;
-                }
+                return $$typeofType;
               // Fall through
               default:
                 return $$typeof;
@@ -740,7 +802,7 @@ export function getDisplayNameForReactElement(
   switch (elementType) {
     case REACT_CONSUMER_TYPE:
       return 'ContextConsumer';
-    case REACT_PROVIDER_TYPE:
+    case LEGACY_REACT_PROVIDER_TYPE:
       return 'ContextProvider';
     case REACT_CONTEXT_TYPE:
       return 'Context';
@@ -847,6 +909,62 @@ export function formatDataForPreview(
       return `<${truncateForDisplay(
         getDisplayNameForReactElement(data) || 'Unknown',
       )} />`;
+    case 'react_lazy':
+      // To avoid actually initialize a lazy to cause a side-effect we make some assumptions
+      // about the structure of the payload even though that's not really part of the contract.
+      // In practice, this is really just coming from React.lazy helper or Flight.
+      const payload = data._payload;
+      if (payload !== null && typeof payload === 'object') {
+        if (payload._status === 0) {
+          // React.lazy constructor pending
+          return `pending lazy()`;
+        }
+        if (payload._status === 1 && payload._result != null) {
+          // React.lazy constructor fulfilled
+          if (showFormattedValue) {
+            const formatted = formatDataForPreview(
+              payload._result.default,
+              false,
+            );
+            return `fulfilled lazy() {${truncateForDisplay(formatted)}}`;
+          } else {
+            return `fulfilled lazy() {…}`;
+          }
+        }
+        if (payload._status === 2) {
+          // React.lazy constructor rejected
+          if (showFormattedValue) {
+            const formatted = formatDataForPreview(payload._result, false);
+            return `rejected lazy() {${truncateForDisplay(formatted)}}`;
+          } else {
+            return `rejected lazy() {…}`;
+          }
+        }
+        if (payload.status === 'pending' || payload.status === 'blocked') {
+          // React Flight pending
+          return `pending lazy()`;
+        }
+        if (payload.status === 'fulfilled') {
+          // React Flight fulfilled
+          if (showFormattedValue) {
+            const formatted = formatDataForPreview(payload.value, false);
+            return `fulfilled lazy() {${truncateForDisplay(formatted)}}`;
+          } else {
+            return `fulfilled lazy() {…}`;
+          }
+        }
+        if (payload.status === 'rejected') {
+          // React Flight rejected
+          if (showFormattedValue) {
+            const formatted = formatDataForPreview(payload.reason, false);
+            return `rejected lazy() {${truncateForDisplay(formatted)}}`;
+          } else {
+            return `rejected lazy() {…}`;
+          }
+        }
+      }
+      // Some form of uninitialized
+      return 'lazy()';
     case 'array_buffer':
       return `ArrayBuffer(${data.byteLength})`;
     case 'data_view':
