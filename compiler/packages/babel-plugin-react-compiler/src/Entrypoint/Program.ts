@@ -10,9 +10,10 @@ import * as t from '@babel/types';
 import {
   CompilerError,
   CompilerErrorDetail,
+  ErrorCategory,
   ErrorSeverity,
 } from '../CompilerError';
-import {ReactFunctionType} from '../HIR/Environment';
+import {ExternalFunction, ReactFunctionType} from '../HIR/Environment';
 import {CodegenFunction} from '../ReactiveScopes';
 import {isComponentDeclaration} from '../Utils/ComponentDeclaration';
 import {isHookDeclaration} from '../Utils/HookDeclaration';
@@ -31,6 +32,7 @@ import {
   suppressionsToCompilerError,
 } from './Suppression';
 import {GeneratedSource} from '../HIR';
+import {Err, Ok, Result} from '../Utils/Result';
 
 export type CompilerPass = {
   opts: PluginOptions;
@@ -40,25 +42,103 @@ export type CompilerPass = {
 };
 export const OPT_IN_DIRECTIVES = new Set(['use forget', 'use memo']);
 export const OPT_OUT_DIRECTIVES = new Set(['use no forget', 'use no memo']);
+const DYNAMIC_GATING_DIRECTIVE = new RegExp('^use memo if\\(([^\\)]*)\\)$');
 
-export function findDirectiveEnablingMemoization(
+export function tryFindDirectiveEnablingMemoization(
   directives: Array<t.Directive>,
-): t.Directive | null {
-  return (
-    directives.find(directive =>
-      OPT_IN_DIRECTIVES.has(directive.value.value),
-    ) ?? null
+  opts: PluginOptions,
+): Result<t.Directive | null, CompilerError> {
+  const optIn = directives.find(directive =>
+    OPT_IN_DIRECTIVES.has(directive.value.value),
   );
+  if (optIn != null) {
+    return Ok(optIn);
+  }
+  const dynamicGating = findDirectivesDynamicGating(directives, opts);
+  if (dynamicGating.isOk()) {
+    return Ok(dynamicGating.unwrap()?.directive ?? null);
+  } else {
+    return Err(dynamicGating.unwrapErr());
+  }
 }
 
 export function findDirectiveDisablingMemoization(
   directives: Array<t.Directive>,
+  {customOptOutDirectives}: PluginOptions,
 ): t.Directive | null {
+  if (customOptOutDirectives != null) {
+    return (
+      directives.find(
+        directive =>
+          customOptOutDirectives.indexOf(directive.value.value) !== -1,
+      ) ?? null
+    );
+  }
   return (
     directives.find(directive =>
       OPT_OUT_DIRECTIVES.has(directive.value.value),
     ) ?? null
   );
+}
+function findDirectivesDynamicGating(
+  directives: Array<t.Directive>,
+  opts: PluginOptions,
+): Result<
+  {
+    gating: ExternalFunction;
+    directive: t.Directive;
+  } | null,
+  CompilerError
+> {
+  if (opts.dynamicGating === null) {
+    return Ok(null);
+  }
+  const errors = new CompilerError();
+  const result: Array<{directive: t.Directive; match: string}> = [];
+
+  for (const directive of directives) {
+    const maybeMatch = DYNAMIC_GATING_DIRECTIVE.exec(directive.value.value);
+    if (maybeMatch != null && maybeMatch[1] != null) {
+      if (t.isValidIdentifier(maybeMatch[1])) {
+        result.push({directive, match: maybeMatch[1]});
+      } else {
+        errors.push({
+          reason: `Dynamic gating directive is not a valid JavaScript identifier`,
+          description: `Found '${directive.value.value}'`,
+          severity: ErrorSeverity.InvalidReact,
+          category: ErrorCategory.Gating,
+          loc: directive.loc ?? null,
+          suggestions: null,
+        });
+      }
+    }
+  }
+  if (errors.hasErrors()) {
+    return Err(errors);
+  } else if (result.length > 1) {
+    const error = new CompilerError();
+    error.push({
+      reason: `Multiple dynamic gating directives found`,
+      description: `Expected a single directive but found [${result
+        .map(r => r.directive.value.value)
+        .join(', ')}]`,
+      severity: ErrorSeverity.InvalidReact,
+      category: ErrorCategory.Gating,
+      loc: result[0].directive.loc ?? null,
+      suggestions: null,
+    });
+    return Err(error);
+  } else if (result.length === 1) {
+    return Ok({
+      gating: {
+        source: opts.dynamicGating.source,
+        importSpecifierName: result[0].match,
+      },
+      directive: result[0].directive,
+    });
+  } else {
+    return Ok(null);
+  }
 }
 
 function isCriticalError(err: unknown): boolean {
@@ -104,7 +184,7 @@ function logError(
         context.opts.logger.logEvent(context.filename, {
           kind: 'CompileError',
           fnLoc,
-          detail: detail.options,
+          detail,
         });
       }
     } else {
@@ -326,7 +406,8 @@ export function compileProgram(
     code: pass.code,
     suppressions,
     hasModuleScopeOptOut:
-      findDirectiveDisablingMemoization(program.node.directives) != null,
+      findDirectiveDisablingMemoization(program.node.directives, pass.opts) !=
+      null,
   });
 
   const queue: Array<CompileSource> = findFunctionsToCompile(
@@ -378,6 +459,7 @@ export function compileProgram(
           reason:
             'Unexpected compiled functions when module scope opt-out is present',
           severity: ErrorSeverity.Invariant,
+          category: ErrorCategory.Invariant,
           loc: null,
         }),
       );
@@ -412,7 +494,20 @@ function findFunctionsToCompile(
 ): Array<CompileSource> {
   const queue: Array<CompileSource> = [];
   const traverseFunction = (fn: BabelFn, pass: CompilerPass): void => {
+    // In 'all' mode, compile only top level functions
+    if (
+      pass.opts.compilationMode === 'all' &&
+      fn.scope.getProgramParent() !== fn.scope.parent
+    ) {
+      return;
+    }
+
     const fnType = getReactFunctionType(fn, pass);
+
+    if (pass.opts.environment.validateNoDynamicallyCreatedComponentsOrHooks) {
+      validateNoDynamicallyCreatedComponentsOrHooks(fn, pass, programContext);
+    }
+
     if (fnType === null || programContext.alreadyCompiled.has(fn.node)) {
       return;
     }
@@ -477,13 +572,36 @@ function processFn(
   fnType: ReactFunctionType,
   programContext: ProgramContext,
 ): null | CodegenFunction {
-  let directives;
+  let directives: {
+    optIn: t.Directive | null;
+    optOut: t.Directive | null;
+  };
   if (fn.node.body.type !== 'BlockStatement') {
-    directives = {optIn: null, optOut: null};
-  } else {
     directives = {
-      optIn: findDirectiveEnablingMemoization(fn.node.body.directives),
-      optOut: findDirectiveDisablingMemoization(fn.node.body.directives),
+      optIn: null,
+      optOut: null,
+    };
+  } else {
+    const optIn = tryFindDirectiveEnablingMemoization(
+      fn.node.body.directives,
+      programContext.opts,
+    );
+    if (optIn.isErr()) {
+      /**
+       * If parsing opt-in directive fails, it's most likely that React Compiler
+       * was not tested or rolled out on this function. In that case, we handle
+       * the error and fall back to the safest option which is to not optimize
+       * the function.
+       */
+      handleError(optIn.unwrapErr(), programContext, fn.node.loc ?? null);
+      return null;
+    }
+    directives = {
+      optIn: optIn.unwrapOr(null),
+      optOut: findDirectiveDisablingMemoization(
+        fn.node.body.directives,
+        programContext.opts,
+      ),
     };
   }
 
@@ -659,25 +777,31 @@ function applyCompiledFunctions(
   pass: CompilerPass,
   programContext: ProgramContext,
 ): void {
-  const referencedBeforeDeclared =
-    pass.opts.gating != null
-      ? getFunctionReferencedBeforeDeclarationAtTopLevel(program, compiledFns)
-      : null;
+  let referencedBeforeDeclared = null;
   for (const result of compiledFns) {
     const {kind, originalFn, compiledFn} = result;
     const transformedFn = createNewFunctionNode(originalFn, compiledFn);
     programContext.alreadyCompiled.add(transformedFn);
 
-    if (referencedBeforeDeclared != null && kind === 'original') {
-      CompilerError.invariant(pass.opts.gating != null, {
-        reason: "Expected 'gating' import to be present",
-        loc: null,
-      });
+    let dynamicGating: ExternalFunction | null = null;
+    if (originalFn.node.body.type === 'BlockStatement') {
+      const result = findDirectivesDynamicGating(
+        originalFn.node.body.directives,
+        pass.opts,
+      );
+      if (result.isOk()) {
+        dynamicGating = result.unwrap()?.gating ?? null;
+      }
+    }
+    const functionGating = dynamicGating ?? pass.opts.gating;
+    if (kind === 'original' && functionGating != null) {
+      referencedBeforeDeclared ??=
+        getFunctionReferencedBeforeDeclarationAtTopLevel(program, compiledFns);
       insertGatedFunctionDeclaration(
         originalFn,
         transformedFn,
         programContext,
-        pass.opts.gating,
+        functionGating,
         referencedBeforeDeclared.has(result),
       );
     } else {
@@ -704,6 +828,7 @@ function shouldSkipCompilation(
           description:
             "When the 'sources' config options is specified, the React compiler will only compile files with a name",
           severity: ErrorSeverity.InvalidConfig,
+          category: ErrorCategory.Config,
           loc: null,
         }),
       );
@@ -727,14 +852,86 @@ function shouldSkipCompilation(
   return false;
 }
 
+/**
+ * Validates that Components/Hooks are always defined at module level. This prevents scope reference
+ * errors that occur when the compiler attempts to optimize the nested component/hook while its
+ * parent function remains uncompiled.
+ */
+function validateNoDynamicallyCreatedComponentsOrHooks(
+  fn: BabelFn,
+  pass: CompilerPass,
+  programContext: ProgramContext,
+): void {
+  const parentNameExpr = getFunctionName(fn);
+  const parentName =
+    parentNameExpr !== null && parentNameExpr.isIdentifier()
+      ? parentNameExpr.node.name
+      : '<anonymous>';
+
+  const validateNestedFunction = (
+    nestedFn: NodePath<
+      t.FunctionDeclaration | t.FunctionExpression | t.ArrowFunctionExpression
+    >,
+  ): void => {
+    if (
+      nestedFn.node === fn.node ||
+      programContext.alreadyCompiled.has(nestedFn.node)
+    ) {
+      return;
+    }
+
+    if (nestedFn.scope.getProgramParent() !== nestedFn.scope.parent) {
+      const nestedFnType = getReactFunctionType(nestedFn as BabelFn, pass);
+      const nestedFnNameExpr = getFunctionName(nestedFn as BabelFn);
+      const nestedName =
+        nestedFnNameExpr !== null && nestedFnNameExpr.isIdentifier()
+          ? nestedFnNameExpr.node.name
+          : '<anonymous>';
+      if (nestedFnType === 'Component' || nestedFnType === 'Hook') {
+        CompilerError.throwDiagnostic({
+          category: ErrorCategory.Factories,
+          severity: ErrorSeverity.InvalidReact,
+          reason: `Components and hooks cannot be created dynamically`,
+          description: `The function \`${nestedName}\` appears to be a React ${nestedFnType.toLowerCase()}, but it's defined inside \`${parentName}\`. Components and Hooks should always be declared at module scope`,
+          details: [
+            {
+              kind: 'error',
+              message: 'this function dynamically created a component/hook',
+              loc: parentNameExpr?.node.loc ?? fn.node.loc ?? null,
+            },
+            {
+              kind: 'error',
+              message: 'the component is created here',
+              loc: nestedFnNameExpr?.node.loc ?? nestedFn.node.loc ?? null,
+            },
+          ],
+        });
+      }
+    }
+
+    nestedFn.skip();
+  };
+
+  fn.traverse({
+    FunctionDeclaration: validateNestedFunction,
+    FunctionExpression: validateNestedFunction,
+    ArrowFunctionExpression: validateNestedFunction,
+  });
+}
+
 function getReactFunctionType(
   fn: BabelFn,
   pass: CompilerPass,
 ): ReactFunctionType | null {
   const hookPattern = pass.opts.environment.hookPattern;
   if (fn.node.body.type === 'BlockStatement') {
-    if (findDirectiveEnablingMemoization(fn.node.body.directives) != null)
+    const optInDirectives = tryFindDirectiveEnablingMemoization(
+      fn.node.body.directives,
+      pass.opts,
+    );
+    if (optInDirectives.unwrapOr(null) != null) {
       return getComponentOrHookLike(fn, hookPattern) ?? 'Other';
+    }
   }
 
   // Component and hook declarations are known components/hooks
@@ -760,11 +957,6 @@ function getReactFunctionType(
       return componentSyntaxType;
     }
     case 'all': {
-      // Compile only top level functions
-      if (fn.scope.getProgramParent() !== fn.scope.parent) {
-        return null;
-      }
-
       return getComponentOrHookLike(fn, hookPattern) ?? 'Other';
     }
     default: {
