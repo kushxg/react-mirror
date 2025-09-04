@@ -9,9 +9,14 @@ export {runBabelPluginReactCompiler} from './Babel/RunReactCompilerBabelPlugin';
 export {
   CompilerError,
   CompilerErrorDetail,
+  CompilerDiagnostic,
   CompilerSuggestionOperation,
   ErrorSeverity,
+  LintRules,
   type CompilerErrorDetailOptions,
+  type CompilerDiagnosticOptions,
+  type CompilerDiagnosticDetail,
+  type LintRule,
 } from './CompilerError';
 export {
   compileFn as compile,
@@ -20,7 +25,7 @@ export {
   OPT_OUT_DIRECTIVES,
   OPT_IN_DIRECTIVES,
   ProgramContext,
-  findDirectiveEnablingMemoization,
+  tryFindDirectiveEnablingMemoization as findDirectiveEnablingMemoization,
   findDirectiveDisablingMemoization,
   type CompilerPipelineValue,
   type Logger,
@@ -30,6 +35,7 @@ export {
 export {
   Effect,
   ValueKind,
+  ValueReason,
   printHIR,
   printFunctionWithOutlined,
   validateEnvironmentConfig,
