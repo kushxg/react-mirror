@@ -363,7 +363,14 @@ const bundles = [
     global: 'ReactDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'crypto', 'async_hooks', 'react-dom'],
+    externals: [
+      'react',
+      'react-dom',
+      'async_hooks',
+      'crypto',
+      'stream',
+      'util',
+    ],
   },
   {
     bundleTypes: __EXPERIMENTAL__ ? [FB_WWW_DEV, FB_WWW_PROD] : [],
@@ -460,7 +467,14 @@ const bundles = [
     global: 'ReactServerDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'crypto', 'async_hooks', 'react-dom'],
+    externals: [
+      'react',
+      'react-dom',
+      'async_hooks',
+      'crypto',
+      'stream',
+      'util',
+    ],
   },
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
@@ -472,7 +486,14 @@ const bundles = [
     global: 'ReactServerDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'crypto', 'async_hooks', 'react-dom'],
+    externals: [
+      'react',
+      'react-dom',
+      'async_hooks',
+      'crypto',
+      'stream',
+      'util',
+    ],
   },
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
@@ -483,14 +504,16 @@ const bundles = [
     global: 'ReactServerDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'crypto', 'async_hooks', 'react-dom'],
+    externals: ['react'],
   },
 
   /******* React Server DOM Webpack Client *******/
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-webpack/client.browser',
+    entry:
+      'react-server-dom-webpack/src/client/react-flight-dom-client.browser',
+    name: 'react-server-dom-webpack-client.browser',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -499,7 +522,8 @@ const bundles = [
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-webpack/client.node',
+    entry: 'react-server-dom-webpack/src/client/react-flight-dom-client.node',
+    name: 'react-server-dom-webpack-client.node',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -508,7 +532,9 @@ const bundles = [
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-webpack/client.node.unbundled',
+    entry:
+      'react-server-dom-webpack/src/client/react-flight-dom-client.node.unbundled',
+    name: 'react-server-dom-webpack-client.node.unbundled',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -517,7 +543,8 @@ const bundles = [
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-webpack/client.edge',
+    entry: 'react-server-dom-webpack/src/client/react-flight-dom-client.edge',
+    name: 'react-server-dom-webpack-client.edge',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -582,7 +609,14 @@ const bundles = [
     global: 'ReactServerDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'async_hooks', 'react-dom'],
+    externals: [
+      'react',
+      'react-dom',
+      'async_hooks',
+      'crypto',
+      'stream',
+      'util',
+    ],
   },
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
@@ -593,14 +627,16 @@ const bundles = [
     global: 'ReactServerDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'async_hooks', 'react-dom'],
+    externals: ['react'],
   },
 
   /******* React Server DOM Turbopack Client *******/
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-turbopack/client.browser',
+    entry:
+      'react-server-dom-turbopack/src/client/react-flight-dom-client.browser',
+    name: 'react-server-dom-turbopack-client.browser',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -609,7 +645,8 @@ const bundles = [
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-turbopack/client.node',
+    entry: 'react-server-dom-turbopack/src/client/react-flight-dom-client.node',
+    name: 'react-server-dom-turbopack-client.node',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -618,7 +655,8 @@ const bundles = [
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-turbopack/client.edge',
+    entry: 'react-server-dom-turbopack/src/client/react-flight-dom-client.edge',
+    name: 'react-server-dom-turbopack-client.edge',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -646,7 +684,14 @@ const bundles = [
     global: 'ReactServerDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'async_hooks', 'react-dom'],
+    externals: [
+      'react',
+      'react-dom',
+      'async_hooks',
+      'crypto',
+      'stream',
+      'util',
+    ],
   },
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
@@ -657,14 +702,15 @@ const bundles = [
     global: 'ReactServerDOMServer',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'async_hooks', 'react-dom'],
+    externals: ['react', 'react-dom'],
   },
 
   /******* React Server DOM Parcel Client *******/
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-parcel/client.browser',
+    entry: 'react-server-dom-parcel/src/client/react-flight-dom-client.browser',
+    name: 'react-server-dom-parcel-client.browser',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -673,7 +719,8 @@ const bundles = [
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-parcel/client.node',
+    entry: 'react-server-dom-parcel/src/client/react-flight-dom-client.node',
+    name: 'react-server-dom-parcel-client.node',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -682,7 +729,8 @@ const bundles = [
   {
     bundleTypes: [NODE_DEV, NODE_PROD],
     moduleType: RENDERER,
-    entry: 'react-server-dom-parcel/client.edge',
+    entry: 'react-server-dom-parcel/src/client/react-flight-dom-client.edge',
+    name: 'react-server-dom-parcel-client.edge',
     global: 'ReactServerDOMClient',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
@@ -698,7 +746,14 @@ const bundles = [
     condition: 'react-server',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'util', 'crypto', 'async_hooks', 'react-dom'],
+    externals: [
+      'react',
+      'react-dom',
+      'async_hooks',
+      'crypto',
+      'stream',
+      'util',
+    ],
   },
 
   /******* React Server DOM ESM Client *******/
@@ -716,7 +771,7 @@ const bundles = [
     entry: 'react-server-dom-esm/client.node',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: ['react', 'react-dom', 'util', 'crypto'],
+    externals: ['react', 'react-dom', 'util'],
   },
 
   /******* React Server DOM ESM Node.js Loader *******/
@@ -1195,7 +1250,16 @@ const bundles = [
     global: 'ESLintPluginReactHooks',
     minifyWithProdErrorCodes: false,
     wrapWithModuleBoundaries: false,
-    externals: [],
+    preferBuiltins: true,
+    externals: [
+      '@babel/core',
+      '@babel/plugin-proposal-private-methods',
+      'hermes-parser',
+      'zod',
+      'zod-validation-error',
+      'crypto',
+      'util',
+    ],
     tsconfig: './packages/eslint-plugin-react-hooks/tsconfig.json',
     prebuild: `mkdir -p ./compiler/packages/babel-plugin-react-compiler/dist && echo "module.exports = require('../src/index.ts');" > ./compiler/packages/babel-plugin-react-compiler/dist/index.js`,
   },
@@ -1283,9 +1347,21 @@ function getFilename(bundle, bundleType) {
   }
 }
 
+let activeBundles = bundles;
+if (process.env.BUNDLES_FILTER != null) {
+  activeBundles = activeBundles.filter(
+    bundle => bundle.name === process.env.BUNDLES_FILTER
+  );
+  if (activeBundles.length === 0) {
+    throw new Error(
+      `No bundles matched for BUNDLES_FILTER=${process.env.BUNDLES_FILTER}`
+    );
+  }
+}
+
 module.exports = {
   bundleTypes,
   moduleTypes,
-  bundles,
+  bundles: activeBundles,
   getFilename,
 };
