@@ -13,6 +13,7 @@ import type {
   Thenable,
   ReactContext,
   ReactDebugInfo,
+  SuspenseListRevealOrder,
 } from 'shared/ReactTypes';
 import type {Fiber} from './ReactInternalTypes';
 import type {Lanes} from './ReactFiberLane';
@@ -67,9 +68,9 @@ import {
   SuspenseActionException,
   createThenableState,
   trackUsedThenable,
+  resolveLazy,
 } from './ReactFiberThenable';
 import {readContextDuringReconciliation} from './ReactFiberNewContext';
-import {callLazyInitInDEV} from './ReactFiberCallUserSpace';
 
 import {runWithFiberInDEV} from './ReactCurrentFiber';
 
@@ -361,15 +362,6 @@ function warnOnSymbolType(returnFiber: Fiber, invalidChild: symbol) {
       );
     }
   }
-}
-
-function resolveLazy(lazyType: any) {
-  if (__DEV__) {
-    return callLazyInitInDEV(lazyType);
-  }
-  const payload = lazyType._payload;
-  const init = lazyType._init;
-  return init(payload);
 }
 
 type ChildReconciler = (
@@ -697,14 +689,7 @@ function createChildReconciler(
         }
         case REACT_LAZY_TYPE: {
           const prevDebugInfo = pushDebugInfo(newChild._debugInfo);
-          let resolvedChild;
-          if (__DEV__) {
-            resolvedChild = callLazyInitInDEV(newChild);
-          } else {
-            const payload = newChild._payload;
-            const init = newChild._init;
-            resolvedChild = init(payload);
-          }
+          const resolvedChild = resolveLazy((newChild: any));
           const created = createChild(returnFiber, resolvedChild, lanes);
           currentDebugInfo = prevDebugInfo;
           return created;
@@ -829,14 +814,7 @@ function createChildReconciler(
         }
         case REACT_LAZY_TYPE: {
           const prevDebugInfo = pushDebugInfo(newChild._debugInfo);
-          let resolvedChild;
-          if (__DEV__) {
-            resolvedChild = callLazyInitInDEV(newChild);
-          } else {
-            const payload = newChild._payload;
-            const init = newChild._init;
-            resolvedChild = init(payload);
-          }
+          const resolvedChild = resolveLazy((newChild: any));
           const updated = updateSlot(
             returnFiber,
             oldFiber,
@@ -961,14 +939,7 @@ function createChildReconciler(
         }
         case REACT_LAZY_TYPE: {
           const prevDebugInfo = pushDebugInfo(newChild._debugInfo);
-          let resolvedChild;
-          if (__DEV__) {
-            resolvedChild = callLazyInitInDEV(newChild);
-          } else {
-            const payload = newChild._payload;
-            const init = newChild._init;
-            resolvedChild = init(payload);
-          }
+          const resolvedChild = resolveLazy((newChild: any));
           const updated = updateFromMap(
             existingChildren,
             returnFiber,
@@ -1085,14 +1056,7 @@ function createChildReconciler(
           });
           break;
         case REACT_LAZY_TYPE: {
-          let resolvedChild;
-          if (__DEV__) {
-            resolvedChild = callLazyInitInDEV((child: any));
-          } else {
-            const payload = child._payload;
-            const init = (child._init: any);
-            resolvedChild = init(payload);
-          }
+          const resolvedChild = resolveLazy((child: any));
           warnOnInvalidKey(
             returnFiber,
             workInProgress,
@@ -1808,14 +1772,7 @@ function createChildReconciler(
           );
         case REACT_LAZY_TYPE: {
           const prevDebugInfo = pushDebugInfo(newChild._debugInfo);
-          let result;
-          if (__DEV__) {
-            result = callLazyInitInDEV(newChild);
-          } else {
-            const payload = newChild._payload;
-            const init = newChild._init;
-            result = init(payload);
-          }
+          const result = resolveLazy((newChild: any));
           const firstChild = reconcileChildFibersImpl(
             returnFiber,
             currentFirstChild,
@@ -2055,5 +2012,107 @@ export function resetChildFibers(workInProgress: Fiber, lanes: Lanes): void {
   while (child !== null) {
     resetWorkInProgress(child, lanes);
     child = child.sibling;
+  }
+}
+
+function validateSuspenseListNestedChild(childSlot: mixed, index: number) {
+  if (__DEV__) {
+    const isAnArray = isArray(childSlot);
+    const isIterable =
+      !isAnArray && typeof getIteratorFn(childSlot) === 'function';
+    const isAsyncIterable =
+      enableAsyncIterableChildren &&
+      typeof childSlot === 'object' &&
+      childSlot !== null &&
+      typeof (childSlot: any)[ASYNC_ITERATOR] === 'function';
+    if (isAnArray || isIterable || isAsyncIterable) {
+      const type = isAnArray
+        ? 'array'
+        : isAsyncIterable
+          ? 'async iterable'
+          : 'iterable';
+      console.error(
+        'A nested %s was passed to row #%s in <SuspenseList />. Wrap it in ' +
+          'an additional SuspenseList to configure its revealOrder: ' +
+          '<SuspenseList revealOrder=...> ... ' +
+          '<SuspenseList revealOrder=...>{%s}</SuspenseList> ... ' +
+          '</SuspenseList>',
+        type,
+        index,
+        type,
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
+export function validateSuspenseListChildren(
+  children: mixed,
+  revealOrder: SuspenseListRevealOrder,
+) {
+  if (__DEV__) {
+    if (
+      (revealOrder === 'forwards' ||
+        revealOrder === 'backwards' ||
+        revealOrder === 'unstable_legacy-backwards') &&
+      children !== undefined &&
+      children !== null &&
+      children !== false
+    ) {
+      if (isArray(children)) {
+        for (let i = 0; i < children.length; i++) {
+          if (!validateSuspenseListNestedChild(children[i], i)) {
+            return;
+          }
+        }
+      } else {
+        const iteratorFn = getIteratorFn(children);
+        if (typeof iteratorFn === 'function') {
+          const childrenIterator = iteratorFn.call(children);
+          if (childrenIterator) {
+            let step = childrenIterator.next();
+            let i = 0;
+            for (; !step.done; step = childrenIterator.next()) {
+              if (!validateSuspenseListNestedChild(step.value, i)) {
+                return;
+              }
+              i++;
+            }
+          }
+        } else if (
+          enableAsyncIterableChildren &&
+          typeof (children: any)[ASYNC_ITERATOR] === 'function'
+        ) {
+          // TODO: Technically we should warn for nested arrays inside the
+          // async iterable but it would require unwrapping the array.
+          // However, this mistake is not as easy to make so it's ok not to warn.
+        } else if (
+          enableAsyncIterableChildren &&
+          children.$$typeof === REACT_ELEMENT_TYPE &&
+          typeof children.type === 'function' &&
+          // $FlowFixMe
+          (Object.prototype.toString.call(children.type) ===
+            '[object GeneratorFunction]' ||
+            // $FlowFixMe
+            Object.prototype.toString.call(children.type) ===
+              '[object AsyncGeneratorFunction]')
+        ) {
+          console.error(
+            'A generator Component was passed to a <SuspenseList revealOrder="%s" />. ' +
+              'This is not supported as a way to generate lists. Instead, pass an ' +
+              'iterable as the children.',
+            revealOrder,
+          );
+        } else {
+          console.error(
+            'A single row was passed to a <SuspenseList revealOrder="%s" />. ' +
+              'This is not useful since it needs multiple rows. ' +
+              'Did you mean to pass multiple children or an array?',
+            revealOrder,
+          );
+        }
+      }
+    }
   }
 }
