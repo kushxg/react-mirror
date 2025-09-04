@@ -5,13 +5,21 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import {CompilerError, ErrorSeverity} from '..';
+import {
+  CompilerDiagnostic,
+  CompilerError,
+  ErrorCategory,
+  ErrorSeverity,
+} from '../CompilerError';
+import {SuppressionRange, suppressionsToCompilerError} from '../Entrypoint';
 import {FunctionExpression, HIRFunction, IdentifierId} from '../HIR';
 import {Result} from '../Utils/Result';
 
 export function validateUseMemo(fn: HIRFunction): Result<void, CompilerError> {
   const errors = new CompilerError();
+  const suppressions: Array<SuppressionRange> = [];
   const useMemos = new Set<IdentifierId>();
+  const effects = new Set<IdentifierId>();
   const react = new Set<IdentifierId>();
   const functions = new Map<IdentifierId, FunctionExpression>();
   for (const [, block] of fn.body.blocks) {
@@ -20,6 +28,12 @@ export function validateUseMemo(fn: HIRFunction): Result<void, CompilerError> {
         case 'LoadGlobal': {
           if (value.binding.name === 'useMemo') {
             useMemos.add(lvalue.identifier.id);
+          } else if (
+            value.binding.name === 'useEffect' ||
+            value.binding.name === 'useLayoutEffect' ||
+            value.binding.name === 'useInsertionEffect'
+          ) {
+            effects.add(lvalue.identifier.id);
           } else if (value.binding.name === 'React') {
             react.add(lvalue.identifier.id);
           }
@@ -29,6 +43,12 @@ export function validateUseMemo(fn: HIRFunction): Result<void, CompilerError> {
           if (react.has(value.object.identifier.id)) {
             if (value.property === 'useMemo') {
               useMemos.add(lvalue.identifier.id);
+            } else if (
+              value.property === 'useEffect' ||
+              value.property === 'useLayoutEffect' ||
+              value.property === 'useInsertionEffect'
+            ) {
+              effects.add(lvalue.identifier.id);
             }
           }
           break;
@@ -42,9 +62,18 @@ export function validateUseMemo(fn: HIRFunction): Result<void, CompilerError> {
           // Is the function being called useMemo, with at least 1 argument?
           const callee =
             value.kind === 'CallExpression'
-              ? value.callee.identifier.id
-              : value.property.identifier.id;
-          const isUseMemo = useMemos.has(callee);
+              ? value.callee.identifier
+              : value.property.identifier;
+          const isEffect = effects.has(callee.id);
+          if (
+            !isEffect &&
+            value.suppressions != null &&
+            value.suppressions.length !== 0
+          ) {
+            suppressions.push(...value.suppressions);
+          }
+
+          const isUseMemo = useMemos.has(callee.id);
           if (!isUseMemo || value.args.length === 0) {
             continue;
           }
@@ -63,30 +92,53 @@ export function validateUseMemo(fn: HIRFunction): Result<void, CompilerError> {
           }
 
           if (body.loweredFunc.func.params.length > 0) {
-            errors.push({
-              severity: ErrorSeverity.InvalidReact,
-              reason: 'useMemo callbacks may not accept any arguments',
-              description: null,
-              loc: body.loc,
-              suggestions: null,
-            });
+            const firstParam = body.loweredFunc.func.params[0];
+            const loc =
+              firstParam.kind === 'Identifier'
+                ? firstParam.loc
+                : firstParam.place.loc;
+            errors.pushDiagnostic(
+              CompilerDiagnostic.create({
+                category: ErrorCategory.UseMemo,
+                severity: ErrorSeverity.InvalidReact,
+                reason: 'useMemo() callbacks may not accept parameters',
+                description:
+                  'useMemo() callbacks are called by React to cache calculations across re-renders. They should not take parameters. Instead, directly reference the props, state, or local variables needed for the computation.',
+                suggestions: null,
+              }).withDetail({
+                kind: 'error',
+                loc,
+                message: 'Callbacks with parameters are not supported',
+              }),
+            );
           }
 
           if (body.loweredFunc.func.async || body.loweredFunc.func.generator) {
-            errors.push({
-              severity: ErrorSeverity.InvalidReact,
-              reason:
-                'useMemo callbacks may not be async or generator functions',
-              description: null,
-              loc: body.loc,
-              suggestions: null,
-            });
+            errors.pushDiagnostic(
+              CompilerDiagnostic.create({
+                category: ErrorCategory.UseMemo,
+                severity: ErrorSeverity.InvalidReact,
+                reason:
+                  'useMemo() callbacks may not be async or generator functions',
+                description:
+                  'useMemo() callbacks are called once and must synchronously return a value.',
+                suggestions: null,
+              }).withDetail({
+                kind: 'error',
+                loc: body.loc,
+                message: 'Async and generator functions are not supported',
+              }),
+            );
           }
 
           break;
         }
       }
     }
+  }
+  if (suppressions.length !== 0) {
+    const suppressionError = suppressionsToCompilerError(suppressions);
+    errors.merge(suppressionError);
   }
   return errors.asResult();
 }
