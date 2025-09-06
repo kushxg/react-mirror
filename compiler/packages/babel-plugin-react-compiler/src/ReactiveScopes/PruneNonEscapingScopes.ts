@@ -24,7 +24,6 @@ import {
   getHookKind,
   isMutableEffect,
 } from '../HIR';
-import {getFunctionCallSignature} from '../Inference/InferReferenceEffects';
 import {assertExhaustive, getOrInsertDefault} from '../Utils/utils';
 import {getPlaceScope, ReactiveScope} from '../HIR/HIR';
 import {
@@ -35,6 +34,7 @@ import {
   visitReactiveFunction,
 } from './visitors';
 import {printPlace} from '../HIR/PrintHIR';
+import {getFunctionCallSignature} from '../Inference/InferMutationAliasingEffects';
 
 /*
  * This pass prunes reactive scopes that are not necessary to bound downstream computation.
@@ -411,7 +411,9 @@ class CollectDependenciesVisitor extends ReactiveFunctionVisitor<
     this.state = state;
     this.options = {
       memoizeJsxElements: !this.env.config.enableForest,
-      forceMemoizePrimitives: this.env.config.enableForest,
+      forceMemoizePrimitives:
+        this.env.config.enableForest ||
+        this.env.config.enablePreserveExistingMemoizationGuarantees,
     };
   }
 
@@ -534,9 +536,23 @@ class CollectDependenciesVisitor extends ReactiveFunctionVisitor<
       case 'JSXText':
       case 'BinaryExpression':
       case 'UnaryExpression': {
-        const level = options.forceMemoizePrimitives
-          ? MemoizationLevel.Memoized
-          : MemoizationLevel.Never;
+        if (options.forceMemoizePrimitives) {
+          /**
+           * Because these instructions produce primitives we usually don't consider
+           * them as escape points: they are known to copy, not return references.
+           * However if we're forcing memoization of primitives then we mark these
+           * instructions as needing memoization and walk their rvalues to ensure
+           * any scopes transitively reachable from the rvalues are considered for
+           * memoization. Note: we may still prune primitive-producing scopes if
+           * they don't ultimately escape at all.
+           */
+          const level = MemoizationLevel.Conditional;
+          return {
+            lvalues: lvalue !== null ? [{place: lvalue, level}] : [],
+            rvalues: [...eachReactiveValueOperand(value)],
+          };
+        }
+        const level = MemoizationLevel.Never;
         return {
           // All of these instructions return a primitive value and never need to be memoized
           lvalues: lvalue !== null ? [{place: lvalue, level}] : [],
@@ -685,9 +701,7 @@ class CollectDependenciesVisitor extends ReactiveFunctionVisitor<
       }
       case 'ComputedLoad':
       case 'PropertyLoad': {
-        const level = options.forceMemoizePrimitives
-          ? MemoizationLevel.Memoized
-          : MemoizationLevel.Conditional;
+        const level = MemoizationLevel.Conditional;
         return {
           // Indirection for the inner value, memoized if the value is
           lvalues: lvalue !== null ? [{place: lvalue, level}] : [],
@@ -829,12 +843,14 @@ class CollectDependenciesVisitor extends ReactiveFunctionVisitor<
         };
       }
       case 'UnsupportedNode': {
-        CompilerError.invariant(false, {
-          reason: `Unexpected unsupported node`,
-          description: null,
-          loc: value.loc,
-          suggestions: null,
-        });
+        const lvalues = [];
+        if (lvalue !== null) {
+          lvalues.push({place: lvalue, level: MemoizationLevel.Never});
+        }
+        return {
+          lvalues,
+          rvalues: [],
+        };
       }
       default: {
         assertExhaustive(
@@ -1064,12 +1080,29 @@ class PruneScopesTransform extends ReactiveFunctionTransform<
 
     const value = instruction.value;
     if (value.kind === 'StoreLocal' && value.lvalue.kind === 'Reassign') {
+      // Complex cases of useMemo inlining result in a temporary that is reassigned
       const ids = getOrInsertDefault(
         this.reassignments,
         value.lvalue.place.identifier.declarationId,
         new Set(),
       );
       ids.add(value.value.identifier);
+    } else if (
+      value.kind === 'LoadLocal' &&
+      value.place.identifier.scope != null &&
+      instruction.lvalue != null &&
+      instruction.lvalue.identifier.scope == null
+    ) {
+      /*
+       * Simpler cases result in a direct assignment to the original lvalue, with a
+       * LoadLocal
+       */
+      const ids = getOrInsertDefault(
+        this.reassignments,
+        instruction.lvalue.identifier.declarationId,
+        new Set(),
+      );
+      ids.add(value.place.identifier);
     } else if (value.kind === 'FinishMemoize') {
       let decls;
       if (value.decl.identifier.scope == null) {
