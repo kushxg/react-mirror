@@ -10,13 +10,14 @@ import {
   compressToEncodedURIComponent,
   decompressFromEncodedURIComponent,
 } from 'lz-string';
-import {defaultStore} from '../defaultStore';
+import {defaultStore, defaultConfig} from '../defaultStore';
 
 /**
  * Global Store for Playground
  */
 export interface Store {
   source: string;
+  config?: string;
 }
 export function encodeStore(store: Store): string {
   return compressToEncodedURIComponent(JSON.stringify(store));
@@ -65,5 +66,14 @@ export function initStoreFromUrlOrLocalStorage(): Store {
   const raw = decodeStore(encodedSource);
 
   invariant(isValidStore(raw), 'Invalid Store');
+
+  // Add config property if missing for backwards compatibility
+  if (!('config' in raw) || !raw['config']) {
+    return {
+      ...raw,
+      config: defaultConfig,
+    };
+  }
+
   return raw;
 }

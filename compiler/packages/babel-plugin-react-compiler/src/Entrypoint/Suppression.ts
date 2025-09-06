@@ -8,10 +8,10 @@
 import {NodePath} from '@babel/core';
 import * as t from '@babel/types';
 import {
+  CompilerDiagnostic,
   CompilerError,
-  CompilerErrorDetail,
   CompilerSuggestionOperation,
-  ErrorSeverity,
+  ErrorCategory,
 } from '../CompilerError';
 import {assertExhaustive} from '../Utils/utils';
 import {GeneratedSource} from '../HIR';
@@ -152,7 +152,14 @@ export function suppressionsToCompilerError(
 ): CompilerError {
   CompilerError.invariant(suppressionRanges.length !== 0, {
     reason: `Expected at least suppression comment source range`,
-    loc: GeneratedSource,
+    description: null,
+    details: [
+      {
+        kind: 'error',
+        loc: GeneratedSource,
+        message: null,
+      },
+    ],
   });
   const error = new CompilerError();
   for (const suppressionRange of suppressionRanges) {
@@ -181,12 +188,11 @@ export function suppressionsToCompilerError(
           'Unhandled suppression source',
         );
     }
-    error.pushErrorDetail(
-      new CompilerErrorDetail({
-        reason: `${reason}. React Compiler only works when your components follow all the rules of React, disabling them may result in unexpected or incorrect behavior`,
-        description: suppressionRange.disableComment.value.trim(),
-        severity: ErrorSeverity.InvalidReact,
-        loc: suppressionRange.disableComment.loc ?? null,
+    error.pushDiagnostic(
+      CompilerDiagnostic.create({
+        reason: reason,
+        description: `React Compiler only works when your components follow all the rules of React, disabling them may result in unexpected or incorrect behavior. Found suppression \`${suppressionRange.disableComment.value.trim()}\``,
+        category: ErrorCategory.Suppression,
         suggestions: [
           {
             description: suggestion,
@@ -197,6 +203,10 @@ export function suppressionsToCompilerError(
             op: CompilerSuggestionOperation.Remove,
           },
         ],
+      }).withDetails({
+        kind: 'error',
+        loc: suppressionRange.disableComment.loc ?? null,
+        message: 'Found React rule suppression',
       }),
     );
   }
