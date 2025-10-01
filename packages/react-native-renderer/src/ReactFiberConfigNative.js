@@ -15,6 +15,7 @@ import {
   ReactNativeViewConfigRegistry,
   UIManager,
   deepFreezeAndThrowOnMutationInDev,
+  createPublicInstance,
   type PublicRootInstance,
 } from 'react-native/Libraries/ReactPrivate/ReactNativePrivateInterface';
 
@@ -285,8 +286,26 @@ export function getChildHostContext(
 
 export function getPublicInstance(instance: Instance): PublicInstance {
   // $FlowExpectedError[prop-missing] For compatibility with Fabric
-  if (instance.canonical != null && instance.canonical.publicInstance != null) {
-    // $FlowFixMe[incompatible-return]
+  if (instance.canonical != null) {
+    if (instance.canonical.publicInstance == null) {
+      // $FlowExpectedError[incompatible-use]
+      instance.canonical.publicInstance = createPublicInstance(
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.nativeTag,
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.viewConfig,
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.internalInstanceHandle,
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.publicRootInstance ?? null,
+      );
+      // This was only necessary to create the public instance.
+      // $FlowExpectedError[prop-missing]
+      instance.canonical.publicRootInstance = null;
+    }
+
+    // $FlowExpectedError[prop-missing]
+    // $FlowExpectedError[incompatible-return]
     return instance.canonical.publicInstance;
   }
 
@@ -307,7 +326,7 @@ export const warnsIfNotActing = true;
 
 export const scheduleTimeout = setTimeout;
 export const cancelTimeout = clearTimeout;
-export const noTimeout = -1;
+export const noTimeout: -1 = -1;
 
 export function shouldSetTextContent(type: string, props: Props): boolean {
   // TODO (bvaughn) Revisit this decision.
@@ -645,6 +664,7 @@ export function hasInstanceAffectedParent(
 }
 
 export function startViewTransition(
+  suspendedState: null | SuspendedState,
   rootContainer: Container,
   transitionTypes: null | TransitionTypes,
   mutationCallback: () => void,
@@ -653,6 +673,7 @@ export function startViewTransition(
   spawnedWorkCallback: () => void,
   passiveCallback: () => mixed,
   errorCallback: mixed => void,
+  blockedCallback: string => void, // Profiling-only
 ): null | RunningViewTransition {
   mutationCallback();
   layoutCallback();
@@ -665,6 +686,7 @@ export function startViewTransition(
 export type RunningViewTransition = null;
 
 export function startGestureTransition(
+  suspendedState: null | SuspendedState,
   rootContainer: Container,
   timeline: GestureTimeline,
   rangeStart: number,
@@ -759,17 +781,28 @@ export function preloadInstance(
   return true;
 }
 
-export function startSuspendingCommit(): void {}
+export opaque type SuspendedState = null;
+
+export function startSuspendingCommit(): SuspendedState {
+  return null;
+}
 
 export function suspendInstance(
+  state: SuspendedState,
   instance: Instance,
   type: Type,
   props: Props,
 ): void {}
 
-export function suspendOnActiveViewTransition(container: Container): void {}
+export function suspendOnActiveViewTransition(
+  state: SuspendedState,
+  container: Container,
+): void {}
 
-export function waitForCommitToBeReady(): null {
+export function waitForCommitToBeReady(
+  state: SuspendedState,
+  timeoutOffset: number,
+): null {
   return null;
 }
 
