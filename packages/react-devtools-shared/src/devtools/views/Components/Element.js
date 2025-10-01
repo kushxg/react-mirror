@@ -24,6 +24,7 @@ import type {Element as ElementType} from 'react-devtools-shared/src/frontend/ty
 import styles from './Element.css';
 import Icon from '../Icon';
 import {useChangeOwnerAction} from './OwnersListContext';
+import Tooltip from './reach-ui/tooltip';
 
 type Props = {
   data: ItemData,
@@ -45,10 +46,6 @@ export default function Element({data, index, style}: Props): React.Node {
 
   const [isHovered, setIsHovered] = useState(false);
 
-  const {isNavigatingWithKeyboard, onElementMouseEnter, treeFocused} = data;
-  const id = element === null ? null : element.id;
-  const isSelected = inspectedElementID === id;
-
   const errorsAndWarningsSubscription = useMemo(
     () => ({
       getCurrentValue: () =>
@@ -68,6 +65,15 @@ export default function Element({data, index, style}: Props): React.Node {
   }>(errorsAndWarningsSubscription);
 
   const changeOwnerAction = useChangeOwnerAction();
+
+  // Handle elements that are removed from the tree while an async render is in progress.
+  if (element == null) {
+    console.warn(`<Element> Could not find element at index ${index}`);
+
+    // This return needs to happen after hooks, since hooks can't be conditional.
+    return null;
+  }
+
   const handleDoubleClick = () => {
     if (id !== null) {
       changeOwnerAction(id);
@@ -75,8 +81,8 @@ export default function Element({data, index, style}: Props): React.Node {
   };
 
   // $FlowFixMe[missing-local-annot]
-  const handleClick = ({metaKey}) => {
-    if (id !== null) {
+  const handleClick = ({metaKey, button}) => {
+    if (id !== null && button === 0) {
       logEvent({
         event_name: 'select-element',
         metadata: {source: 'click-element'},
@@ -107,22 +113,29 @@ export default function Element({data, index, style}: Props): React.Node {
     event.preventDefault();
   };
 
-  // Handle elements that are removed from the tree while an async render is in progress.
-  if (element == null) {
-    console.warn(`<Element> Could not find element at index ${index}`);
-
-    // This return needs to happen after hooks, since hooks can't be conditional.
-    return null;
-  }
-
   const {
+    id,
     depth,
     displayName,
     hocDisplayNames,
     isStrictModeNonCompliant,
     key,
+    nameProp,
     compiledWithForget,
   } = element;
+  const {
+    isNavigatingWithKeyboard,
+    onElementMouseEnter,
+    treeFocused,
+    calculateElementOffset,
+  } = data;
+
+  const isSelected = inspectedElementID === id;
+  const isDescendantOfSelected =
+    inspectedElementID !== null &&
+    !isSelected &&
+    store.isDescendantOf(inspectedElementID, id);
+  const elementOffset = calculateElementOffset(depth);
 
   // Only show strict mode non-compliance badges for top level elements.
   // Showing an inline badge for every element in the tree would be noisy.
@@ -135,6 +148,10 @@ export default function Element({data, index, style}: Props): React.Node {
       : styles.InactiveSelectedElement;
   } else if (isHovered && !isNavigatingWithKeyboard) {
     className = styles.HoveredElement;
+  } else if (isDescendantOfSelected) {
+    className = treeFocused
+      ? styles.HighlightedElement
+      : styles.InactiveHighlightedElement;
   }
 
   return (
@@ -144,17 +161,13 @@ export default function Element({data, index, style}: Props): React.Node {
       onMouseLeave={handleMouseLeave}
       onMouseDown={handleClick}
       onDoubleClick={handleDoubleClick}
-      style={style}
-      data-testname="ComponentTreeListItem"
-      data-depth={depth}>
+      style={{
+        ...style,
+        paddingLeft: elementOffset,
+      }}
+      data-testname="ComponentTreeListItem">
       {/* This wrapper is used by Tree for measurement purposes. */}
-      <div
-        className={styles.Wrapper}
-        style={{
-          // Left offset presents the appearance of a nested tree structure.
-          // We must use padding rather than margin/left because of the selected background color.
-          transform: `translateX(calc(${depth} * var(--indentation-size)))`,
-        }}>
+      <div className={styles.Wrapper}>
         {ownerID === null && (
           <ExpandCollapseToggle element={element} store={store} />
         )}
@@ -168,7 +181,24 @@ export default function Element({data, index, style}: Props): React.Node {
               className={styles.KeyValue}
               title={key}
               onDoubleClick={handleKeyDoubleClick}>
-              <pre>{key}</pre>
+              <pre>
+                <IndexableDisplayName displayName={key} id={id} />
+              </pre>
+            </span>
+            "
+          </Fragment>
+        )}
+
+        {nameProp && (
+          <Fragment>
+            &nbsp;<span className={styles.KeyName}>name</span>="
+            <span
+              className={styles.KeyValue}
+              title={nameProp}
+              onDoubleClick={handleKeyDoubleClick}>
+              <pre>
+                <IndexableDisplayName displayName={nameProp} id={id} />
+              </pre>
             </span>
             "
           </Fragment>
@@ -202,15 +232,16 @@ export default function Element({data, index, style}: Props): React.Node {
           />
         )}
         {showStrictModeBadge && (
-          <Icon
-            className={
-              isSelected && treeFocused
-                ? styles.StrictModeContrast
-                : styles.StrictMode
-            }
-            title="This component is not running in StrictMode."
-            type="strict-mode-non-compliant"
-          />
+          <Tooltip label="This component is not running in StrictMode.">
+            <Icon
+              className={
+                isSelected && treeFocused
+                  ? styles.StrictModeContrast
+                  : styles.StrictMode
+              }
+              type="strict-mode-non-compliant"
+            />
+          </Tooltip>
         )}
       </div>
     </div>
