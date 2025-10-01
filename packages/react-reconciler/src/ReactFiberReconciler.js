@@ -57,7 +57,7 @@ import {
   processChildContext,
   emptyContextObject,
   isContextProvider as isLegacyContextProvider,
-} from './ReactFiberContext';
+} from './ReactFiberLegacyContext';
 import {createFiberRoot} from './ReactFiberRoot';
 import {isRootDehydrated} from './ReactFiberShellHydration';
 import {
@@ -125,6 +125,7 @@ export {
   defaultOnRecoverableError,
 } from './ReactFiberErrorLogger';
 import {getLabelForLane, TotalLanes} from 'react-reconciler/src/ReactFiberLane';
+import {registerDefaultIndicator} from './ReactFiberAsyncAction';
 
 type OpaqueRoot = FiberRoot;
 
@@ -137,7 +138,7 @@ if (__DEV__) {
 }
 
 function getContextForSubtree(
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
 ): Object {
   if (!parentComponent) {
     return emptyContextObject;
@@ -247,7 +248,7 @@ export function createContainer(
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
@@ -259,7 +260,7 @@ export function createContainer(
 ): OpaqueRoot {
   const hydrate = false;
   const initialChildren = null;
-  return createFiberRoot(
+  const root = createFiberRoot(
     containerInfo,
     tag,
     hydrate,
@@ -274,6 +275,8 @@ export function createContainer(
     onDefaultTransitionIndicator,
     transitionCallbacks,
   );
+  registerDefaultIndicator(onDefaultTransitionIndicator);
+  return root;
 }
 
 export function createHydrationContainer(
@@ -295,7 +298,7 @@ export function createHydrationContainer(
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
@@ -323,6 +326,8 @@ export function createHydrationContainer(
     transitionCallbacks,
   );
 
+  registerDefaultIndicator(onDefaultTransitionIndicator);
+
   // TODO: Move this to FiberRoot constructor
   root.context = getContextForSubtree(null);
 
@@ -341,6 +346,7 @@ export function createHydrationContainer(
   update.callback =
     callback !== undefined && callback !== null ? callback : null;
   enqueueUpdate(current, update, lane);
+  startUpdateTimerByLane(lane, 'hydrateRoot()', null);
   scheduleInitialHydrationOnRoot(root, lane);
 
   return root;
@@ -349,7 +355,7 @@ export function createHydrationContainer(
 export function updateContainer(
   element: ReactNodeList,
   container: OpaqueRoot,
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
   callback: ?Function,
 ): Lane {
   const current = container.current;
@@ -368,7 +374,7 @@ export function updateContainer(
 export function updateContainerSync(
   element: ReactNodeList,
   container: OpaqueRoot,
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
   callback: ?Function,
 ): Lane {
   if (!disableLegacyMode && container.tag === LegacyRoot) {
@@ -391,7 +397,7 @@ function updateContainerImpl(
   lane: Lane,
   element: ReactNodeList,
   container: OpaqueRoot,
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
   callback: ?Function,
 ): void {
   if (__DEV__) {
@@ -447,7 +453,7 @@ function updateContainerImpl(
 
   const root = enqueueUpdate(rootFiber, update, lane);
   if (root !== null) {
-    startUpdateTimerByLane(lane, 'root.render()');
+    startUpdateTimerByLane(lane, 'root.render()', null);
     scheduleUpdateOnFiber(root, rootFiber, lane);
     entangleTransitions(root, rootFiber, lane);
   }
@@ -465,7 +471,7 @@ export {
 
 export function getPublicRootInstance(
   container: OpaqueRoot,
-): React$Component<any, any> | PublicInstance | null {
+): component(...props: any) | PublicInstance | null {
   const containerFiber = container.current;
   if (!containerFiber.child) {
     return null;
