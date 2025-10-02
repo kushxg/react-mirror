@@ -28,7 +28,7 @@ describe('ReactFragment', () => {
 
     React = require('react');
     Suspense = React.Suspense;
-    Activity = React.unstable_Activity;
+    Activity = React.Activity;
     ViewTransition = React.unstable_ViewTransition;
     ReactNoop = require('react-noop-renderer');
     const InternalTestUtils = require('internal-test-utils');
@@ -87,7 +87,7 @@ describe('ReactFragment', () => {
   function normalizeCodeLocInfo(str) {
     return (
       str &&
-      str.replace(/\n +(?:at|in) ([\S]+)[^\n]*/g, function (m, name) {
+      str.replace(/\n +(?:at|in) ([^\(]+) [^\n]*/g, function (m, name) {
         return '\n    in ' + name + ' (at **)';
       })
     );
@@ -164,6 +164,40 @@ describe('ReactFragment', () => {
     expect(rootCaughtErrors).toEqual([
       'uh oh',
       componentStack(['SomethingThatErrors', 'Suspense', 'CatchingBoundary']),
+      __DEV__ ? componentStack(['SomethingThatErrors']) : null,
+    ]);
+  });
+
+  it('includes built-in for Suspense fallbacks', async () => {
+    const SomethingThatSuspends = React.lazy(() => {
+      return new Promise(() => {});
+    });
+
+    ReactNoop.createRoot({
+      onCaughtError,
+    }).render(
+      <CatchingBoundary>
+        <Suspense fallback={<SomethingThatErrors />}>
+          <SomethingThatSuspends />
+        </Suspense>
+      </CatchingBoundary>,
+    );
+    await waitForAll([]);
+    expect(didCatchErrors).toEqual([
+      'uh oh',
+      componentStack([
+        'SomethingThatErrors',
+        'Suspense Fallback',
+        'CatchingBoundary',
+      ]),
+    ]);
+    expect(rootCaughtErrors).toEqual([
+      'uh oh',
+      componentStack([
+        'SomethingThatErrors',
+        'Suspense Fallback',
+        'CatchingBoundary',
+      ]),
       __DEV__ ? componentStack(['SomethingThatErrors']) : null,
     ]);
   });
@@ -255,7 +289,7 @@ describe('ReactFragment', () => {
       onCaughtError,
     }).render(
       <CatchingBoundary>
-        <SuspenseList>
+        <SuspenseList revealOrder="independent">
           <SomethingThatErrors />
         </SuspenseList>
       </CatchingBoundary>,
