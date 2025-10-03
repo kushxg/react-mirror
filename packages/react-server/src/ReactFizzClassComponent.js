@@ -7,7 +7,7 @@
  * @flow
  */
 
-import {emptyContextObject} from './ReactFizzContext';
+import {emptyContextObject} from './ReactFizzLegacyContext';
 import {readContext} from './ReactFizzNewContext';
 
 import {disableLegacyContext} from 'shared/ReactFeatureFlags';
@@ -79,7 +79,7 @@ function warnOnUndefinedDerivedState(type: any, partialState: any) {
 }
 
 function warnNoop(
-  publicInstance: React$Component<any, any>,
+  publicInstance: component(...props: any),
   callerName: string,
 ) {
   if (__DEV__) {
@@ -459,17 +459,17 @@ function checkClassInstance(instance: any, ctor: any, newProps: any) {
         name,
       );
     }
-    if (typeof instance.componentWillRecieveProps === 'function') {
+    if (typeof instance.componentWillReceiveProps === 'function') {
       console.error(
         '%s has a method called ' +
-          'componentWillRecieveProps(). Did you mean componentWillReceiveProps()?',
+          'componentWillReceiveProps(). Did you mean componentWillReceiveProps()?',
         name,
       );
     }
-    if (typeof instance.UNSAFE_componentWillRecieveProps === 'function') {
+    if (typeof instance.UNSAFE_componentWillReceiveProps === 'function') {
       console.error(
         '%s has a method called ' +
-          'UNSAFE_componentWillRecieveProps(). Did you mean UNSAFE_componentWillReceiveProps()?',
+          'UNSAFE_componentWillReceiveProps(). Did you mean UNSAFE_componentWillReceiveProps()?',
         name,
       );
     }
