@@ -24,7 +24,7 @@ describe('Activity', () => {
     Scheduler = require('scheduler');
     act = require('internal-test-utils').act;
     LegacyHidden = React.unstable_LegacyHidden;
-    Activity = React.unstable_Activity;
+    Activity = React.Activity;
     useState = React.useState;
     useInsertionEffect = React.useInsertionEffect;
     useLayoutEffect = React.useLayoutEffect;
@@ -280,7 +280,7 @@ describe('Activity', () => {
 
   // @gate enableActivity
   it('nested offscreen does not call componentWillUnmount when hidden', async () => {
-    // This is a bug that appeared during production test of <unstable_Activity />.
+    // This is a bug that appeared during production test of <Activity />.
     // It is a very specific scenario with nested Offscreens. The inner offscreen
     // goes from visible to hidden in synchronous update.
     class ClassComponent extends React.Component {
@@ -764,7 +764,7 @@ describe('Activity', () => {
       assertConsoleErrorDev([
         "Can't perform a React state update on a component that hasn't mounted yet. " +
           'This indicates that you have a side-effect in your render function that ' +
-          'asynchronously later calls tries to update the component. ' +
+          'asynchronously tries to update the component. ' +
           'Move this work to useEffect instead.\n' +
           '    in Child (at **)',
       ]);
