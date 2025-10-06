@@ -7,5 +7,27 @@
  * @flow
  */
 
+import type {
+  AsyncSequence,
+  AwaitNode,
+  PromiseNode,
+  UnresolvedAwaitNode,
+  UnresolvedPromiseNode,
+} from './ReactFlightAsyncSequence';
+
 // Exported for runtimes that don't support Promise instrumentation for async debugging.
 export function initAsyncDebugInfo(): void {}
+export function markAsyncSequenceRootTask(): void {}
+export function getCurrentAsyncSequence(): null | AsyncSequence {
+  return null;
+}
+export function getAsyncSequenceFromPromise(
+  promise: any,
+): null | AsyncSequence {
+  return null;
+}
+export function getInternalAwaitNode(
+  promiseNode: UnresolvedPromiseNode | PromiseNode,
+): null | UnresolvedAwaitNode | AwaitNode {
+  return null;
+}
