@@ -7,8 +7,5 @@
     "ecmaFeatures": {
       "jsx": true
     }
-  },
-  "rules": {
-    "react-hooks/exhaustive-deps": "error"
   }
 }
