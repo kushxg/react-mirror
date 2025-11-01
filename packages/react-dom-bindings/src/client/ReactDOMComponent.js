@@ -72,6 +72,7 @@ import {
   enableScrollEndPolyfill,
   enableSrcObject,
   enableTrustedTypesIntegration,
+  enableViewTransition,
 } from 'shared/ReactFeatureFlags';
 import {
   mediaEventTypes,
@@ -229,6 +230,13 @@ function warnForPropDifference(
     if (normalizedServerValue === normalizedClientValue) {
       return;
     }
+    if (propName === 'class' || propName === 'className') {
+      const normalizedClientClass = normalizeClassForHydration(clientValue);
+      const normalizedServerClass = normalizeClassForHydration(serverValue);
+      if (normalizedServerClass === normalizedClientClass) {
+        return;
+      }
+    }
 
     serverDifferences[propName] = serverValue;
   }
@@ -299,6 +307,12 @@ function normalizeHTML(parent: Element, html: string) {
 const NORMALIZE_NEWLINES_REGEX = /\r\n?/g;
 const NORMALIZE_NULL_AND_REPLACEMENT_REGEX = /\u0000|\uFFFD/g;
 
+// HTML: `class` is a space-separated token list split on ASCII whitespace
+// (TAB U+0009, LF U+000A, FF U+000C, CR U+000D, SPACE U+0020).
+// Specs: https://infra.spec.whatwg.org/#ascii-whitespace
+//        https://html.spec.whatwg.org/multipage/dom.html#global-attributes
+const HTML_SPACE_CLASS_SEPARATOR = /[ \t\n\f\r]+/;
+
 function normalizeMarkupForTextOrAttribute(markup: mixed): string {
   if (__DEV__) {
     checkHtmlStringCoercion(markup);
@@ -307,6 +321,14 @@ function normalizeMarkupForTextOrAttribute(markup: mixed): string {
   return markupString
     .replace(NORMALIZE_NEWLINES_REGEX, '\n')
     .replace(NORMALIZE_NULL_AND_REPLACEMENT_REGEX, '');
+}
+
+function normalizeClassForHydration(markup: mixed): string {
+  const s = normalizeMarkupForTextOrAttribute(markup);
+  const tokens = s.trim().split(HTML_SPACE_CLASS_SEPARATOR).filter(Boolean);
+  const unique = Array.from(new Set(tokens));
+  unique.sort();
+  return unique.join(' ');
 }
 
 function checkForUnmatchedText(
@@ -3217,6 +3239,18 @@ export function diffHydratedProperties(
           break;
         case 'selected':
           break;
+        case 'vt-name':
+        case 'vt-update':
+        case 'vt-enter':
+        case 'vt-exit':
+        case 'vt-share':
+          if (enableViewTransition) {
+            // View Transition annotations are expected from the Server Runtime.
+            // However, if they're also specified on the client and don't match
+            // that's an error.
+            break;
+          }
+        // Fallthrough
         default:
           // Intentionally use the original name.
           // See discussion in https://github.com/facebook/react/pull/10676.
