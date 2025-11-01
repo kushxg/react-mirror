@@ -35,10 +35,8 @@ import {
   enableLegacyHidden,
   enableSuspenseCallback,
   enableScopeAPI,
-  enablePersistedModeClonedFlag,
   enableProfilerTimer,
   enableTransitionTracing,
-  enableRenderableContext,
   passChildrenWhenCloningPersistedNodes,
   disableLegacyMode,
   enableViewTransition,
@@ -93,7 +91,6 @@ import {
   Snapshot,
   ChildDeletion,
   StaticMask,
-  MutationMask,
   Passive,
   ForceClientRender,
   MaySuspendCommit,
@@ -102,6 +99,7 @@ import {
   Cloned,
   ViewTransitionStatic,
   Hydrate,
+  HoistableStatic,
 } from './ReactFiberFlags';
 
 import {
@@ -151,7 +149,7 @@ import {
   isContextProvider as isLegacyContextProvider,
   popContext as popLegacyContext,
   popTopLevelContextObject as popTopLevelLegacyContextObject,
-} from './ReactFiberContext';
+} from './ReactFiberLegacyContext';
 import {popProvider} from './ReactFiberNewContext';
 import {
   prepareToHydrateHostInstance,
@@ -184,13 +182,14 @@ import {resetChildFibers} from './ReactChildFiber';
 import {createScopeInstance} from './ReactFiberScope';
 import {transferActualDuration} from './ReactProfilerTimer';
 import {popCacheProvider} from './ReactFiberCacheComponent';
-import {popTreeContext} from './ReactFiberTreeContext';
+import {popTreeContext, pushTreeFork} from './ReactFiberTreeContext';
 import {popRootTransition, popTransition} from './ReactFiberTransition';
 import {
   popMarkerInstance,
   popRootMarkerInstance,
 } from './ReactFiberTracingMarkerComponent';
 import {suspendCommit} from './ReactFiberThenable';
+import type {Flags} from './ReactFiberFlags';
 
 /**
  * Tag the fiber with an update effect. This turns a Placement into
@@ -205,7 +204,7 @@ function markUpdate(workInProgress: Fiber) {
  * it received an update that requires a clone of the tree above.
  */
 function markCloned(workInProgress: Fiber) {
-  if (supportsPersistence && enablePersistedModeClonedFlag) {
+  if (supportsPersistence) {
     workInProgress.flags |= Cloned;
   }
 }
@@ -227,9 +226,7 @@ function doesRequireClone(current: null | Fiber, completedWork: Fiber) {
   // then we only have to check the `completedWork.subtreeFlags`.
   let child = completedWork.child;
   while (child !== null) {
-    const checkedFlags = enablePersistedModeClonedFlag
-      ? Cloned | Visibility | Placement | ChildDeletion
-      : MutationMask;
+    const checkedFlags = Cloned | Visibility | Placement | ChildDeletion;
     if (
       (child.flags & checkedFlags) !== NoFlags ||
       (child.subtreeFlags & checkedFlags) !== NoFlags
@@ -526,16 +523,9 @@ function updateHostComponent(
       markUpdate(workInProgress);
     }
     workInProgress.stateNode = newInstance;
-    if (!requiresClone) {
-      if (!enablePersistedModeClonedFlag) {
-        // If there are no other effects in this tree, we need to flag this node as having one.
-        // Even though we're not going to use it for anything.
-        // Otherwise parents won't know that there are new children to propagate upwards.
-        markUpdate(workInProgress);
-      }
-    } else if (
-      !passChildrenWhenCloningPersistedNodes ||
-      hasOffscreenComponentChild
+    if (
+      requiresClone &&
+      (!passChildrenWhenCloningPersistedNodes || hasOffscreenComponentChild)
     ) {
       // If children have changed, we have to add them all to the set.
       appendAllChildren(
@@ -693,11 +683,6 @@ function updateHostText(
         currentHostContext,
         workInProgress,
       );
-      if (!enablePersistedModeClonedFlag) {
-        // We'll have to mark it as having an effect, even though we won't use the effect for anything.
-        // This lets the parents know that at least one of their children has changed.
-        markUpdate(workInProgress);
-      }
     } else {
       workInProgress.stateNode = current.stateNode;
     }
@@ -781,7 +766,7 @@ function bubbleProperties(completedWork: Fiber) {
     completedWork.alternate.child === completedWork.child;
 
   let newChildLanes: Lanes = NoLanes;
-  let subtreeFlags = NoFlags;
+  let subtreeFlags: Flags = NoFlags;
 
   if (!didBailout) {
     // Bubble up the earliest expiration time.
@@ -1193,6 +1178,10 @@ function completeWork(
           // @TODO refactor this block to create the instance here in complete
           // phase if we are not hydrating.
           markUpdate(workInProgress);
+          // Mark this fiber as containing a hoistable. This flag will bubble up
+          // through subtreeFlags, allowing us to skip traversals in subtrees that
+          // don't contain any hoistables during Activity visibility transitions.
+          workInProgress.flags |= HoistableStatic;
           if (nextResource !== null) {
             // This is a Hoistable Resource
 
@@ -1221,6 +1210,8 @@ function completeWork(
           }
         } else {
           // This is an update.
+          // Mark this fiber as containing a hoistable.
+          workInProgress.flags |= HoistableStatic;
           if (nextResource) {
             // This is a Resource
             if (nextResource !== current.memoizedState) {
@@ -1667,12 +1658,7 @@ function completeWork(
       return null;
     case ContextProvider:
       // Pop provider fiber
-      let context: ReactContext<any>;
-      if (enableRenderableContext) {
-        context = workInProgress.type;
-      } else {
-        context = workInProgress.type._context;
-      }
+      const context: ReactContext<any> = workInProgress.type;
       popProvider(context, workInProgress);
       bubbleProperties(workInProgress);
       return null;
@@ -1764,6 +1750,10 @@ function completeWork(
                     ForceSuspenseFallback,
                   ),
                 );
+                if (getIsHydrating()) {
+                  // Re-apply tree fork since we popped the tree fork context in the beginning of this function.
+                  pushTreeFork(workInProgress, renderState.treeForkCount);
+                }
                 // Don't bubble properties in this case.
                 return workInProgress.child;
               }
@@ -1890,6 +1880,10 @@ function completeWork(
         }
         pushSuspenseListContext(workInProgress, suspenseContext);
         // Do a pass over the next row.
+        if (getIsHydrating()) {
+          // Re-apply tree fork since we popped the tree fork context in the beginning of this function.
+          pushTreeFork(workInProgress, renderState.treeForkCount);
+        }
         // Don't bubble properties in this case.
         return next;
       }
