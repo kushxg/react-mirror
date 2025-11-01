@@ -21,10 +21,11 @@ let ReactDOM;
 let ReactDOMClient;
 let ReactDOMFizzServer;
 let Suspense;
+let SuspenseList;
 let textCache;
 let loadCache;
 let writable;
-const CSPnonce = null;
+let CSPnonce = null;
 let container;
 let buffer = '';
 let hasErrored = false;
@@ -68,12 +69,14 @@ describe('ReactDOMFloat', () => {
       setTimeout(cb);
     container = document.getElementById('container');
 
+    CSPnonce = null;
     React = require('react');
     ReactDOM = require('react-dom');
     ReactDOMClient = require('react-dom/client');
     ReactDOMFizzServer = require('react-dom/server');
     Stream = require('stream');
     Suspense = React.Suspense;
+    SuspenseList = React.unstable_SuspenseList;
     Scheduler = require('scheduler/unstable_mock');
 
     const InternalTestUtils = require('internal-test-utils');
@@ -704,8 +707,14 @@ describe('ReactDOMFloat', () => {
         (gate(flags => flags.shouldUseFizzExternalRuntime)
           ? '<script src="react-dom/unstable_server-external-runtime" async=""></script>'
           : '') +
-        '<link rel="expect" href="#«R»" blocking="render"/><title>foo</title></head>' +
-        '<body>bar<template id="«R»"></template>',
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<link rel="expect" href="#_R_" blocking="render"/>'
+          : '') +
+        '<title>foo</title></head>' +
+        '<body>bar' +
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<template id="_R_"></template>'
+          : ''),
       '</body></html>',
     ]);
   });
@@ -4418,6 +4427,103 @@ body {
     );
   });
 
+  it.only('can emit preloads for suspended components', async () => {
+    function Child({text}) {
+      ReactDOM.preload('script', {as: 'script'});
+      ReactDOM.preload('a', {as: 'image'});
+      ReactDOM.preload('b', {as: 'image'});
+
+      return (
+        <>
+          <AsyncText text={text} />
+          <img src="a" />
+          <img src="b" loading="lazy" />
+          <img src="b2" loading="lazy" />
+          <img src="c" srcSet="srcsetc" />
+          <img src="d" srcSet="srcsetd" sizes="sizesd" />
+          <img src="d" srcSet="srcsetd" sizes="sizesd2" />
+        </>
+      );
+    }
+
+    function App({text}) {
+      return (
+        <html>
+          <body>
+            <Suspense fallback={<span>{`Waiting for ${text}...`}</span>}>
+              <Child text={text} />
+            </Suspense>
+          </body>
+        </html>
+      );
+    }
+
+    await act(() => {
+      renderToPipeableStream(<App text="A" />).pipe(writable);
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="preload" href="a" as="image" />
+          <link rel="preload" as="image" imagesrcset="srcsetc" />
+          <link
+            rel="preload"
+            as="image"
+            imagesrcset="srcsetd"
+            imagesizes="sizesd"
+          />
+          <link
+            rel="preload"
+            as="image"
+            imagesrcset="srcsetd"
+            imagesizes="sizesd2"
+          />
+          <link rel="preload" href="script" as="script" />
+          <link rel="preload" href="b" as="image" />
+        </head>
+        <body>
+          <span>Waiting for A...</span>
+        </body>
+      </html>,
+    );
+
+    await act(() => {
+      resolveText('A');
+    });
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="preload" href="a" as="image" />
+          <link rel="preload" as="image" imagesrcset="srcsetc" />
+          <link
+            rel="preload"
+            as="image"
+            imagesrcset="srcsetd"
+            imagesizes="sizesd"
+          />
+          <link
+            rel="preload"
+            as="image"
+            imagesrcset="srcsetd"
+            imagesizes="sizesd2"
+          />
+          <link rel="preload" href="script" as="script" />
+          <link rel="preload" href="b" as="image" />
+        </head>
+        <body>
+          A
+          <img src="a" />
+          <img src="b" loading="lazy" />
+          <img src="b2" loading="lazy" />
+          <img src="c" srcset="srcsetc" />
+          <img src="d" srcset="srcsetd" sizes="sizesd" />
+          <img src="d" srcset="srcsetd" sizes="sizesd2" />
+        </body>
+      </html>,
+    );
+  });
+
   it('Does not preload lazy images', async () => {
     function App() {
       ReactDOM.preload('a', {as: 'image'});
@@ -5735,6 +5841,181 @@ body {
           <div>inner blocked fallback</div>
           <link rel="preload" href="completed inner" as="style" />
           <link rel="preload" href="in fallback inner" as="style" />
+        </body>
+      </html>,
+    );
+  });
+
+  // @gate enableSuspenseList
+  it('delays "forwards" SuspenseList rows until the css of previous rows have completed', async () => {
+    await act(() => {
+      renderToPipeableStream(
+        <html>
+          <body>
+            <Suspense fallback="loading...">
+              <SuspenseList revealOrder="forwards" tail="visible">
+                <Suspense fallback="loading foo...">
+                  <BlockedOn value="foo">
+                    <link rel="stylesheet" href="foo" precedence="foo" />
+                    foo
+                  </BlockedOn>
+                </Suspense>
+                <Suspense fallback="loading bar...">bar</Suspense>
+                <BlockedOn value="bar">
+                  <Suspense fallback="loading baz...">
+                    <BlockedOn value="baz">baz</BlockedOn>
+                  </Suspense>
+                </BlockedOn>
+              </SuspenseList>
+            </Suspense>
+          </body>
+        </html>,
+      ).pipe(writable);
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head />
+        <body>loading...</body>
+      </html>,
+    );
+
+    // unblock css loading
+    await act(() => {
+      resolveText('foo');
+    });
+
+    // bar is still blocking the whole list
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    // unblock inner loading states
+    await act(() => {
+      resolveText('bar');
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+          {'loading baz...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    // resolve the last boundary
+    await act(() => {
+      resolveText('baz');
+    });
+
+    // still blocked on the css of the first row
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+          {'loading baz...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    await act(() => {
+      loadStylesheets();
+    });
+    await assertLog(['load stylesheet: foo']);
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'foo'}
+          {'bar'}
+          {'baz'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+  });
+
+  // @gate enableSuspenseList
+  it('delays "together" SuspenseList rows until the css of previous rows have completed', async () => {
+    await act(() => {
+      renderToPipeableStream(
+        <html>
+          <body>
+            <SuspenseList revealOrder="together">
+              <Suspense fallback="loading foo...">
+                <BlockedOn value="foo">
+                  <link rel="stylesheet" href="foo" precedence="foo" />
+                  foo
+                </BlockedOn>
+              </Suspense>
+              <Suspense fallback="loading bar...">bar</Suspense>
+            </SuspenseList>
+          </body>
+        </html>,
+      ).pipe(writable);
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head />
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+        </body>
+      </html>,
+    );
+
+    await act(() => {
+      resolveText('foo');
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    await act(() => {
+      loadStylesheets();
+    });
+    await assertLog(['load stylesheet: foo']);
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'foo'}
+          {'bar'}
+          <link as="style" href="foo" rel="preload" />
         </body>
       </html>,
     );
@@ -7207,7 +7488,6 @@ body {
       );
     });
 
-    // @gate favorSafetyOverHydrationPerf
     it('retains styles even when a new html, head, and/body mount', async () => {
       await act(() => {
         const {pipe} = renderToPipeableStream(
@@ -8412,6 +8692,86 @@ background-color: green;
           '    in style (at **)',
       ]);
     });
+
+    it('can emit styles with nonce', async () => {
+      const nonce = 'R4nD0m';
+      const fooCss = '.foo { color: hotpink; }';
+      const barCss = '.bar { background-color: blue; }';
+      const bazCss = '.baz { border: 1px solid black; }';
+      await act(() => {
+        renderToPipeableStream(
+          <html>
+            <body>
+              <Suspense>
+                <BlockedOn value="first">
+                  <div>first</div>
+                  <style href="foo" precedence="default" nonce={nonce}>
+                    {fooCss}
+                  </style>
+                  <style href="bar" precedence="default" nonce={nonce}>
+                    {barCss}
+                  </style>
+                  <BlockedOn value="second">
+                    <div>second</div>
+                    <style href="baz" precedence="default" nonce={nonce}>
+                      {bazCss}
+                    </style>
+                  </BlockedOn>
+                </BlockedOn>
+              </Suspense>
+            </body>
+          </html>,
+          {nonce: {style: nonce}},
+        ).pipe(writable);
+      });
+
+      expect(getMeaningfulChildren(document)).toEqual(
+        <html>
+          <head />
+          <body />
+        </html>,
+      );
+
+      await act(() => {
+        resolveText('first');
+      });
+
+      expect(getMeaningfulChildren(document)).toEqual(
+        <html>
+          <head />
+          <body>
+            <style
+              data-href="foo bar"
+              data-precedence="default"
+              media="not all"
+              nonce={nonce}>
+              {`${fooCss}${barCss}`}
+            </style>
+          </body>
+        </html>,
+      );
+
+      await act(() => {
+        resolveText('second');
+      });
+
+      expect(getMeaningfulChildren(document)).toEqual(
+        <html>
+          <head>
+            <style data-href="foo bar" data-precedence="default" nonce={nonce}>
+              {`${fooCss}${barCss}`}
+            </style>
+            <style data-href="baz" data-precedence="default" nonce={nonce}>
+              {bazCss}
+            </style>
+          </head>
+          <body>
+            <div>first</div>
+            <div>second</div>
+          </body>
+        </html>,
+      );
+    });
   });
 
   describe('Script Resources', () => {
@@ -9094,7 +9454,6 @@ background-color: green;
       ]);
     });
 
-    // @gate favorSafetyOverHydrationPerf
     it('can render a title before a singleton even if that singleton clears its contents', async () => {
       await act(() => {
         const {pipe} = renderToPipeableStream(
