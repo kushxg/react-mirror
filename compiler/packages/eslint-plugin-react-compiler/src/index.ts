@@ -7,27 +7,22 @@
 
 import ReactCompilerRule from './rules/ReactCompilerRule';
 
-const meta = {
-  name: 'eslint-plugin-react-compiler',
-};
-
-const rules = {
-  'react-compiler': ReactCompilerRule,
-};
-
-const configs = {
-  recommended: {
-    plugins: {
-      'react-compiler': {
-        rules: {
-          'react-compiler': ReactCompilerRule,
+module.exports = {
+  rules: {
+    'react-compiler': ReactCompilerRule,
+  },
+  configs: {
+    recommended: {
+      plugins: {
+        'react-compiler': {
+          rules: {
+            'react-compiler': ReactCompilerRule,
+          },
         },
       },
-    },
-    rules: {
-      'react-compiler/react-compiler': 'error' as const,
+      rules: {
+        'react-compiler/react-compiler': 'error',
+      },
     },
   },
 };
-
-export {configs, rules, meta};
