@@ -6,8 +6,13 @@
  */
 
 import * as t from '@babel/types';
-import {z} from 'zod';
-import {CompilerError, CompilerErrorDetailOptions} from '../CompilerError';
+import {z} from 'zod/v4';
+import {
+  CompilerDiagnostic,
+  CompilerError,
+  CompilerErrorDetail,
+  CompilerErrorDetailOptions,
+} from '../CompilerError';
 import {
   EnvironmentConfig,
   ExternalFunction,
@@ -15,7 +20,7 @@ import {
   tryParseExternalFunction,
 } from '../HIR/Environment';
 import {hasOwnProperty} from '../Utils/utils';
-import {fromZodError} from 'zod-validation-error';
+import {fromZodError} from 'zod-validation-error/v4';
 import {CompilerPipelineValue} from './Pipeline';
 
 const PanicThresholdOptionsSchema = z.enum([
@@ -37,9 +42,17 @@ const PanicThresholdOptionsSchema = z.enum([
 ]);
 
 export type PanicThresholdOptions = z.infer<typeof PanicThresholdOptionsSchema>;
+const DynamicGatingOptionsSchema = z.object({
+  source: z.string(),
+});
+export type DynamicGatingOptions = z.infer<typeof DynamicGatingOptionsSchema>;
+const CustomOptOutDirectiveSchema = z
+  .nullable(z.array(z.string()))
+  .default(null);
+type CustomOptOutDirective = z.infer<typeof CustomOptOutDirectiveSchema>;
 
-export type PluginOptions = {
-  environment: EnvironmentConfig;
+export type PluginOptions = Partial<{
+  environment: Partial<EnvironmentConfig>;
 
   logger: Logger | null;
 
@@ -64,6 +77,28 @@ export type PluginOptions = {
    *   var Foo = isForgetEnabled_Pokes() ? Foo_forget : Foo_uncompiled;
    */
   gating: ExternalFunction | null;
+
+  /**
+   * If specified, this enables dynamic gating which matches `use memo if(...)`
+   * directives.
+   *
+   * Example usage:
+   * ```js
+   * // @dynamicGating:{"source":"myModule"}
+   * export function MyComponent() {
+   *   'use memo if(isEnabled)';
+   *    return <div>...</div>;
+   * }
+   * ```
+   * This will emit:
+   * ```js
+   * import {isEnabled} from 'myModule';
+   * export const MyComponent = isEnabled()
+   *   ? <optimized version>
+   *   : <original version>;
+   * ```
+   */
+  dynamicGating: DynamicGatingOptions | null;
 
   panicThreshold: PanicThresholdOptions;
 
@@ -100,11 +135,21 @@ export type PluginOptions = {
    */
   eslintSuppressionRules: Array<string> | null | undefined;
 
+  /**
+   * Whether to report "suppression" errors for Flow suppressions. If false, suppression errors
+   * are only emitted for ESLint suppressions
+   */
   flowSuppressions: boolean;
+
   /*
    * Ignore 'use no forget' annotations. Helpful during testing but should not be used in production.
    */
   ignoreUseNoForget: boolean;
+
+  /**
+   * Unstable / do not use
+   */
+  customOptOutDirectives: CustomOptOutDirective;
 
   sources: Array<string> | ((filename: string) => boolean) | null;
 
@@ -121,7 +166,11 @@ export type PluginOptions = {
    * a userspace approximation of runtime APIs.
    */
   target: CompilerReactTarget;
-};
+}>;
+
+export type ParsedPluginOptions = Required<
+  Omit<PluginOptions, 'environment'>
+> & {environment: EnvironmentConfig};
 
 const CompilerReactTargetSchema = z.union([
   z.literal('17'),
@@ -189,7 +238,7 @@ export type LoggerEvent =
 export type CompileErrorEvent = {
   kind: 'CompileError';
   fnLoc: t.SourceLocation | null;
-  detail: CompilerErrorDetailOptions;
+  detail: CompilerErrorDetail | CompilerDiagnostic;
 };
 export type CompileDiagnosticEvent = {
   kind: 'CompileDiagnostic';
@@ -237,13 +286,14 @@ export type Logger = {
   debugLogIRs?: (value: CompilerPipelineValue) => void;
 };
 
-export const defaultOptions: PluginOptions = {
+export const defaultOptions: ParsedPluginOptions = {
   compilationMode: 'infer',
   panicThreshold: 'none',
   environment: parseEnvironmentConfig({}).unwrap(),
   logger: null,
   gating: null,
   noEmit: false,
+  dynamicGating: null,
   eslintSuppressionRules: null,
   flowSuppressions: true,
   ignoreUseNoForget: false,
@@ -251,10 +301,11 @@ export const defaultOptions: PluginOptions = {
     return filename.indexOf('node_modules') === -1;
   },
   enableReanimatedCheck: true,
+  customOptOutDirectives: null,
   target: '19',
-} as const;
+};
 
-export function parsePluginOptions(obj: unknown): PluginOptions {
+export function parsePluginOptions(obj: unknown): ParsedPluginOptions {
   if (obj == null || typeof obj !== 'object') {
     return defaultOptions;
   }
@@ -289,6 +340,40 @@ export function parsePluginOptions(obj: unknown): PluginOptions {
             parsedOptions[key] = null;
           } else {
             parsedOptions[key] = tryParseExternalFunction(value);
+          }
+          break;
+        }
+        case 'dynamicGating': {
+          if (value == null) {
+            parsedOptions[key] = null;
+          } else {
+            const result = DynamicGatingOptionsSchema.safeParse(value);
+            if (result.success) {
+              parsedOptions[key] = result.data;
+            } else {
+              CompilerError.throwInvalidConfig({
+                reason:
+                  'Could not parse dynamic gating. Update React Compiler config to fix the error',
+                description: `${fromZodError(result.error)}`,
+                loc: null,
+                suggestions: null,
+              });
+            }
+          }
+          break;
+        }
+        case 'customOptOutDirectives': {
+          const result = CustomOptOutDirectiveSchema.safeParse(value);
+          if (result.success) {
+            parsedOptions[key] = result.data;
+          } else {
+            CompilerError.throwInvalidConfig({
+              reason:
+                'Could not parse custom opt out directives. Update React Compiler config to fix the error',
+              description: `${fromZodError(result.error)}`,
+              loc: null,
+              suggestions: null,
+            });
           }
           break;
         }
