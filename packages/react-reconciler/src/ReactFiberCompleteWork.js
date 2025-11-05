@@ -35,10 +35,8 @@ import {
   enableLegacyHidden,
   enableSuspenseCallback,
   enableScopeAPI,
-  enablePersistedModeClonedFlag,
   enableProfilerTimer,
   enableTransitionTracing,
-  enableRenderableContext,
   passChildrenWhenCloningPersistedNodes,
   disableLegacyMode,
   enableViewTransition,
@@ -93,7 +91,6 @@ import {
   Snapshot,
   ChildDeletion,
   StaticMask,
-  MutationMask,
   Passive,
   ForceClientRender,
   MaySuspendCommit,
@@ -151,7 +148,7 @@ import {
   isContextProvider as isLegacyContextProvider,
   popContext as popLegacyContext,
   popTopLevelContextObject as popTopLevelLegacyContextObject,
-} from './ReactFiberContext';
+} from './ReactFiberLegacyContext';
 import {popProvider} from './ReactFiberNewContext';
 import {
   prepareToHydrateHostInstance,
@@ -184,13 +181,14 @@ import {resetChildFibers} from './ReactChildFiber';
 import {createScopeInstance} from './ReactFiberScope';
 import {transferActualDuration} from './ReactProfilerTimer';
 import {popCacheProvider} from './ReactFiberCacheComponent';
-import {popTreeContext} from './ReactFiberTreeContext';
+import {popTreeContext, pushTreeFork} from './ReactFiberTreeContext';
 import {popRootTransition, popTransition} from './ReactFiberTransition';
 import {
   popMarkerInstance,
   popRootMarkerInstance,
 } from './ReactFiberTracingMarkerComponent';
 import {suspendCommit} from './ReactFiberThenable';
+import type {Flags} from './ReactFiberFlags';
 
 /**
  * Tag the fiber with an update effect. This turns a Placement into
@@ -205,7 +203,7 @@ function markUpdate(workInProgress: Fiber) {
  * it received an update that requires a clone of the tree above.
  */
 function markCloned(workInProgress: Fiber) {
-  if (supportsPersistence && enablePersistedModeClonedFlag) {
+  if (supportsPersistence) {
     workInProgress.flags |= Cloned;
   }
 }
@@ -227,9 +225,7 @@ function doesRequireClone(current: null | Fiber, completedWork: Fiber) {
   // then we only have to check the `completedWork.subtreeFlags`.
   let child = completedWork.child;
   while (child !== null) {
-    const checkedFlags = enablePersistedModeClonedFlag
-      ? Cloned | Visibility | Placement | ChildDeletion
-      : MutationMask;
+    const checkedFlags = Cloned | Visibility | Placement | ChildDeletion;
     if (
       (child.flags & checkedFlags) !== NoFlags ||
       (child.subtreeFlags & checkedFlags) !== NoFlags
@@ -526,16 +522,9 @@ function updateHostComponent(
       markUpdate(workInProgress);
     }
     workInProgress.stateNode = newInstance;
-    if (!requiresClone) {
-      if (!enablePersistedModeClonedFlag) {
-        // If there are no other effects in this tree, we need to flag this node as having one.
-        // Even though we're not going to use it for anything.
-        // Otherwise parents won't know that there are new children to propagate upwards.
-        markUpdate(workInProgress);
-      }
-    } else if (
-      !passChildrenWhenCloningPersistedNodes ||
-      hasOffscreenComponentChild
+    if (
+      requiresClone &&
+      (!passChildrenWhenCloningPersistedNodes || hasOffscreenComponentChild)
     ) {
       // If children have changed, we have to add them all to the set.
       appendAllChildren(
@@ -693,11 +682,6 @@ function updateHostText(
         currentHostContext,
         workInProgress,
       );
-      if (!enablePersistedModeClonedFlag) {
-        // We'll have to mark it as having an effect, even though we won't use the effect for anything.
-        // This lets the parents know that at least one of their children has changed.
-        markUpdate(workInProgress);
-      }
     } else {
       workInProgress.stateNode = current.stateNode;
     }
@@ -714,30 +698,8 @@ function cutOffTailIfNeeded(
     return;
   }
   switch (renderState.tailMode) {
-    case 'hidden': {
-      // Any insertions at the end of the tail list after this point
-      // should be invisible. If there are already mounted boundaries
-      // anything before them are not considered for collapsing.
-      // Therefore we need to go through the whole tail to find if
-      // there are any.
-      let tailNode = renderState.tail;
-      let lastTailNode = null;
-      while (tailNode !== null) {
-        if (tailNode.alternate !== null) {
-          lastTailNode = tailNode;
-        }
-        tailNode = tailNode.sibling;
-      }
-      // Next we're simply going to delete all insertions after the
-      // last rendered item.
-      if (lastTailNode === null) {
-        // All remaining items in the tail are insertions.
-        renderState.tail = null;
-      } else {
-        // Detach the insertion after the last node that was already
-        // inserted.
-        lastTailNode.sibling = null;
-      }
+    case 'visible': {
+      // Everything should remain as it was.
       break;
     }
     case 'collapsed': {
@@ -772,6 +734,34 @@ function cutOffTailIfNeeded(
       }
       break;
     }
+    // Hidden is now the default.
+    case 'hidden':
+    default: {
+      // Any insertions at the end of the tail list after this point
+      // should be invisible. If there are already mounted boundaries
+      // anything before them are not considered for collapsing.
+      // Therefore we need to go through the whole tail to find if
+      // there are any.
+      let tailNode = renderState.tail;
+      let lastTailNode = null;
+      while (tailNode !== null) {
+        if (tailNode.alternate !== null) {
+          lastTailNode = tailNode;
+        }
+        tailNode = tailNode.sibling;
+      }
+      // Next we're simply going to delete all insertions after the
+      // last rendered item.
+      if (lastTailNode === null) {
+        // All remaining items in the tail are insertions.
+        renderState.tail = null;
+      } else {
+        // Detach the insertion after the last node that was already
+        // inserted.
+        lastTailNode.sibling = null;
+      }
+      break;
+    }
   }
 }
 
@@ -781,7 +771,7 @@ function bubbleProperties(completedWork: Fiber) {
     completedWork.alternate.child === completedWork.child;
 
   let newChildLanes: Lanes = NoLanes;
-  let subtreeFlags = NoFlags;
+  let subtreeFlags: Flags = NoFlags;
 
   if (!didBailout) {
     // Bubble up the earliest expiration time.
@@ -1667,12 +1657,7 @@ function completeWork(
       return null;
     case ContextProvider:
       // Pop provider fiber
-      let context: ReactContext<any>;
-      if (enableRenderableContext) {
-        context = workInProgress.type;
-      } else {
-        context = workInProgress.type._context;
-      }
+      const context: ReactContext<any> = workInProgress.type;
       popProvider(context, workInProgress);
       bubbleProperties(workInProgress);
       return null;
@@ -1764,6 +1749,10 @@ function completeWork(
                     ForceSuspenseFallback,
                   ),
                 );
+                if (getIsHydrating()) {
+                  // Re-apply tree fork since we popped the tree fork context in the beginning of this function.
+                  pushTreeFork(workInProgress, renderState.treeForkCount);
+                }
                 // Don't bubble properties in this case.
                 return workInProgress.child;
               }
@@ -1812,7 +1801,8 @@ function completeWork(
             // This might have been modified.
             if (
               renderState.tail === null &&
-              renderState.tailMode === 'hidden' &&
+              renderState.tailMode !== 'collapsed' &&
+              renderState.tailMode !== 'visible' &&
               !renderedTail.alternate &&
               !getIsHydrating() // We don't cut it if we're hydrating.
             ) {
@@ -1848,10 +1838,6 @@ function completeWork(
           }
         }
         if (renderState.isBackwards) {
-          // The effect list of the backwards tail will have been added
-          // to the end. This breaks the guarantee that life-cycles fire in
-          // sibling order but that isn't a strong guarantee promised by React.
-          // Especially since these might also just pop in during future commits.
           // Append to the beginning of the list.
           renderedTail.sibling = workInProgress.child;
           workInProgress.child = renderedTail;
@@ -1890,6 +1876,10 @@ function completeWork(
         }
         pushSuspenseListContext(workInProgress, suspenseContext);
         // Do a pass over the next row.
+        if (getIsHydrating()) {
+          // Re-apply tree fork since we popped the tree fork context in the beginning of this function.
+          pushTreeFork(workInProgress, renderState.treeForkCount);
+        }
         // Don't bubble properties in this case.
         return next;
       }
