@@ -4,63 +4,84 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
-import type {ESLint, Linter, Rule} from 'eslint';
+import type {Linter, Rule, ESLint} from 'eslint';
 
 import ExhaustiveDeps from './rules/ExhaustiveDeps';
-import ReactCompiler from './rules/ReactCompiler';
+import {
+  allRules,
+  mapErrorSeverityToESlint,
+  recommendedRules,
+  recommendedLatestRules,
+} from './shared/ReactCompiler';
 import RulesOfHooks from './rules/RulesOfHooks';
 
-// All rules
 const rules = {
   'exhaustive-deps': ExhaustiveDeps,
-  'react-compiler': ReactCompiler,
   'rules-of-hooks': RulesOfHooks,
+  ...Object.fromEntries(
+    Object.entries(allRules).map(([name, config]) => [name, config.rule]),
+  ),
 } satisfies Record<string, Rule.RuleModule>;
 
-// Config rules
-const configRules = {
+const basicRuleConfigs = {
   'react-hooks/rules-of-hooks': 'error',
   'react-hooks/exhaustive-deps': 'warn',
-} satisfies Linter.RulesRecord;
+} as const satisfies Linter.RulesRecord;
 
-// Flat config
-const recommendedConfig = {
-  name: 'react-hooks/recommended',
-  plugins: {
-    get 'react-hooks'(): ESLint.Plugin {
-      return plugin;
-    },
-  },
-  rules: configRules,
+const recommendedCompilerRuleConfigs = Object.fromEntries(
+  Object.entries(recommendedRules).map(([name, ruleConfig]) => {
+    return [
+      `react-hooks/${name}` as const,
+      mapErrorSeverityToESlint(ruleConfig.severity),
+    ] as const;
+  }),
+) as Record<`react-hooks/${string}`, Linter.RuleEntry>;
+
+const recommendedLatestCompilerRuleConfigs = Object.fromEntries(
+  Object.entries(recommendedLatestRules).map(([name, ruleConfig]) => {
+    return [
+      `react-hooks/${name}` as const,
+      mapErrorSeverityToESlint(ruleConfig.severity),
+    ] as const;
+  }),
+) as Record<`react-hooks/${string}`, Linter.RuleEntry>;
+
+const recommendedRuleConfigs: Linter.RulesRecord = {
+  ...basicRuleConfigs,
+  ...recommendedCompilerRuleConfigs,
+};
+const recommendedLatestRuleConfigs: Linter.RulesRecord = {
+  ...basicRuleConfigs,
+  ...recommendedLatestCompilerRuleConfigs,
 };
 
-// Plugin object
 const plugin = {
-  // TODO: Make this more dynamic to populate version from package.json.
-  // This can be done by injecting at build time, since importing the package.json isn't an option in Meta
-  meta: {name: 'eslint-plugin-react-hooks'},
+  meta: {
+    name: 'eslint-plugin-react-hooks',
+    version: '7.0.0',
+  },
   rules,
   configs: {
-    /** Legacy recommended config, to be used with rc-based configurations */
     'recommended-legacy': {
       plugins: ['react-hooks'],
-      rules: configRules,
+      rules: recommendedRuleConfigs,
     },
-
-    /**
-     * Recommended config, to be used with flat configs.
-     */
-    recommended: recommendedConfig,
-
-    /** @deprecated please use `recommended`; will be removed in v7  */
-    'recommended-latest': recommendedConfig,
+    'recommended-latest-legacy': {
+      plugins: ['react-hooks'],
+      rules: recommendedLatestRuleConfigs,
+    },
+    recommended: {
+      plugins: {'react-hooks': {}},
+      rules: recommendedRuleConfigs,
+    },
+    'recommended-latest': {
+      plugins: {'react-hooks': {}},
+      rules: recommendedLatestRuleConfigs,
+    },
   },
 } satisfies ESLint.Plugin;
 
-const configs = plugin.configs;
-const meta = plugin.meta;
-export {configs, meta, rules};
+plugin.configs.recommended.plugins['react-hooks'] = plugin;
+plugin.configs['recommended-latest'].plugins['react-hooks'] = plugin;
 
-// TODO: If the plugin is ever updated to be pure ESM and drops support for rc-based configs, then it should be exporting the plugin as default
-// instead of individual named exports.
-// export default plugin;
+export default plugin;
