@@ -20,6 +20,10 @@ function normalizeSourceLoc(tree) {
       node.hookSource.lineNumber = 0;
       node.hookSource.columnNumber = 0;
     }
+    // Normalize Promise objects to hide internal symbols
+    if (node.value instanceof Promise) {
+      node.value = Object.create(Promise.prototype);
+    }
     normalizeSourceLoc(node.subHooks);
   });
   return tree;
@@ -718,6 +722,53 @@ describe('ReactHooksInspection', () => {
       }
     `,
     );
+  });
+
+  it('should inspect use() calls in anonymous loops', () => {
+    function Foo({entries}) {
+      const values = Object.fromEntries(
+        Object.entries(entries).map(([key, value]) => {
+          return [key, React.use(value)];
+        }),
+      );
+      return <div>{values}</div>;
+    }
+    const tree = ReactDebugTools.inspectHooks(Foo, {
+      entries: {one: Promise.resolve('one'), two: Promise.resolve('two')},
+    });
+    const results = normalizeSourceLoc(tree);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchInlineSnapshot(`
+      {
+        "debugInfo": null,
+        "hookSource": {
+          "columnNumber": 0,
+          "fileName": "**",
+          "functionName": "Foo",
+          "lineNumber": 0,
+        },
+        "id": null,
+        "isStateEditable": false,
+        "name": "",
+        "subHooks": [
+          {
+            "debugInfo": null,
+            "hookSource": {
+              "columnNumber": 0,
+              "fileName": "**",
+              "functionName": null,
+              "lineNumber": 0,
+            },
+            "id": null,
+            "isStateEditable": false,
+            "name": "Use",
+            "subHooks": [],
+            "value": Promise {},
+          },
+        ],
+        "value": undefined,
+      }
+    `);
   });
 
   describe('useDebugValue', () => {
