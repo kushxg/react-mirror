@@ -22,7 +22,6 @@ export const REACT_PORTAL_TYPE: symbol = Symbol.for('react.portal');
 export const REACT_FRAGMENT_TYPE: symbol = Symbol.for('react.fragment');
 export const REACT_STRICT_MODE_TYPE: symbol = Symbol.for('react.strict_mode');
 export const REACT_PROFILER_TYPE: symbol = Symbol.for('react.profiler');
-export const REACT_PROVIDER_TYPE: symbol = Symbol.for('react.provider'); // TODO: Delete with enableRenderableContext
 export const REACT_CONSUMER_TYPE: symbol = Symbol.for('react.consumer');
 export const REACT_CONTEXT_TYPE: symbol = Symbol.for('react.context');
 export const REACT_FORWARD_REF_TYPE: symbol = Symbol.for('react.forward_ref');
@@ -44,8 +43,6 @@ export const REACT_TRACING_MARKER_TYPE: symbol = Symbol.for(
 export const REACT_MEMO_CACHE_SENTINEL: symbol = Symbol.for(
   'react.memo_cache_sentinel',
 );
-
-export const REACT_POSTPONE_TYPE: symbol = Symbol.for('react.postpone');
 
 export const REACT_VIEW_TRANSITION_TYPE: symbol = Symbol.for(
   'react.view_transition',
