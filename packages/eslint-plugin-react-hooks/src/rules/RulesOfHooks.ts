@@ -6,11 +6,21 @@
  */
 /* eslint-disable no-for-of-loops/no-for-of-loops */
 
-import type {Rule, Scope} from 'eslint';
-import type {CallExpression, DoWhileStatement, Node} from 'estree';
+import type { Rule, Scope } from 'eslint';
+import type {
+  CallExpression,
+  CatchClause,
+  DoWhileStatement,
+  Expression,
+  Identifier,
+  Node,
+  Super,
+  TryStatement,
+} from 'estree';
 
 // @ts-expect-error untyped module
 import CodePathAnalyzer from '../code-path-analysis/code-path-analyzer';
+import { getAdditionalEffectHooksFromSettings } from '../shared/Utils';
 
 /**
  * Catch all identifiers that begin with "use" followed by an uppercase Latin
@@ -111,16 +121,103 @@ function isInsideDoWhileLoop(node: Node | undefined): node is DoWhileStatement {
   return false;
 }
 
-function isUseEffectEventIdentifier(node: Node): boolean {
-  if (__EXPERIMENTAL__) {
-    return node.type === 'Identifier' && node.name === 'useEffectEvent';
+function isInsideTryCatch(
+  node: Node | undefined,
+): node is TryStatement | CatchClause {
+  while (node) {
+    if (node.type === 'TryStatement' || node.type === 'CatchClause') {
+      return true;
+    }
+    node = node.parent;
   }
   return false;
+}
+
+function getNodeWithoutReactNamespace(
+  node: Expression | Super,
+): Expression | Identifier | Super {
+  if (
+    node.type === 'MemberExpression' &&
+    node.object.type === 'Identifier' &&
+    node.object.name === 'React' &&
+    node.property.type === 'Identifier' &&
+    !node.computed
+  ) {
+    return node.property;
+  }
+  return node;
+}
+
+function isEffectIdentifier(node: Node, additionalHooks?: RegExp): boolean {
+  const isBuiltInEffect =
+    node.type === 'Identifier' &&
+    (node.name === 'useEffect' ||
+      node.name === 'useLayoutEffect' ||
+      node.name === 'useInsertionEffect');
+
+  if (isBuiltInEffect) {
+    return true;
+  }
+
+  // Check if this matches additional hooks configured by the user
+  if (additionalHooks && node.type === 'Identifier') {
+    return additionalHooks.test(node.name);
+  }
+
+  return false;
+}
+
+function isUseEffectEventIdentifier(node: Node): boolean {
+  return node.type === 'Identifier' && node.name === 'useEffectEvent';
+}
+
+function useEffectEventError(fn: string | null, called: boolean): string {
+  // no function identifier, i.e. it is not assigned to a variable
+  if (fn === null) {
+    return (
+      `React Hook "useEffectEvent" can only be called at the top level of your component.` +
+      ` It cannot be passed down.`
+    );
+  }
+
+  return (
+    `\`${fn}\` is a function created with React Hook "useEffectEvent", and can only be called from ` +
+    'Effects and Effect Events in the same component.' +
+    (called ? '' : ' It cannot be assigned to a variable or passed down.')
+  );
 }
 
 function isUseIdentifier(node: Node): boolean {
   return isReactFunction(node, 'use');
 }
+
+function isReactComponentClass(node: Node): boolean {
+  // Walk up the tree to find the class declaration
+  let current: Node | undefined = node;
+  while (current) {
+    if (current.type === 'ClassDeclaration' || current.type === 'ClassExpression') {
+      const classNode = current as any;
+      if (classNode.superClass) {
+        const superClass = classNode.superClass;
+        // Check for: extends Component, extends React.Component, extends PureComponent, extends React.PureComponent
+        if (superClass.type === 'Identifier') {
+          return superClass.name === 'Component' || superClass.name === 'PureComponent';
+        } else if (superClass.type === 'MemberExpression') {
+          return (
+            superClass.object.type === 'Identifier' &&
+            superClass.object.name === 'React' &&
+            superClass.property.type === 'Identifier' &&
+            (superClass.property.name === 'Component' || superClass.property.name === 'PureComponent')
+          );
+        }
+      }
+      return false;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 
 const rule = {
   meta: {
@@ -130,8 +227,24 @@ const rule = {
       recommended: true,
       url: 'https://react.dev/reference/rules/rules-of-hooks',
     },
+    schema: [
+      {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          additionalHooks: {
+            type: 'string',
+          },
+        },
+      },
+    ],
   },
   create(context: Rule.RuleContext) {
+    const settings = context.settings || {};
+
+    const additionalEffectHooks =
+      getAdditionalEffectHooksFromSettings(settings);
+
     let lastEffect: CallExpression | null = null;
     const codePathReactHooksMapStack: Array<
       Map<Rule.CodePathSegment, Array<Node>>
@@ -170,22 +283,22 @@ const rule = {
     const getSourceCode =
       typeof context.getSourceCode === 'function'
         ? () => {
-            return context.getSourceCode();
-          }
+          return context.getSourceCode();
+        }
         : () => {
-            return context.sourceCode;
-          };
+          return context.sourceCode;
+        };
     /**
      * SourceCode#getScope that also works down to ESLint 3.0.0
      */
     const getScope =
       typeof context.getScope === 'function'
         ? (): Scope.Scope => {
-            return context.getScope();
-          }
+          return context.getScope();
+        }
         : (node: Node): Scope.Scope => {
-            return getSourceCode().getScope(node);
-          };
+          return getSourceCode().getScope(node);
+        };
 
     function hasFlowSuppression(node: Node, suppression: string) {
       const sourceCode = getSourceCode();
@@ -254,7 +367,7 @@ const rule = {
           segment: Rule.CodePathSegment,
           pathHistory?: Set<string>,
         ): bigint {
-          const {cache} = countPathsFromStart;
+          const { cache } = countPathsFromStart;
           let paths = cache.get(segment.id);
           const pathList = new Set<string>(pathHistory);
 
@@ -328,7 +441,7 @@ const rule = {
           segment: Rule.CodePathSegment,
           pathHistory?: Set<string>,
         ): bigint {
-          const {cache} = countPathsToEnd;
+          const { cache } = countPathsToEnd;
           let paths = cache.get(segment.id);
           const pathList = new Set(pathHistory);
 
@@ -394,7 +507,7 @@ const rule = {
         function shortestPathLengthToStart(
           segment: Rule.CodePathSegment,
         ): number {
-          const {cache} = shortestPathLengthToStart;
+          const { cache } = shortestPathLengthToStart;
           let length = cache.get(segment.id);
 
           // If `length` is null then we found a cycle! Return infinity since
@@ -448,7 +561,7 @@ const rule = {
           isInsideComponentOrHook(codePathNode);
         const isDirectlyInsideComponentOrHook = codePathFunctionName
           ? isComponentName(codePathFunctionName) ||
-            isHook(codePathFunctionName)
+          isHook(codePathFunctionName)
           : isForwardRefCallback(codePathNode) || isMemoCallback(codePathNode);
 
         // Compute the earliest finalizer level using information from the
@@ -532,6 +645,16 @@ const rule = {
               continue;
             }
 
+            // Report an error if use() is called inside try/catch.
+            if (isUseIdentifier(hook) && isInsideTryCatch(hook)) {
+              context.report({
+                node: hook,
+                message: `React Hook "${getSourceCode().getText(
+                  hook,
+                )}" cannot be called in a try/catch block.`,
+              });
+            }
+
             // Report an error if a hook may be called more then once.
             // `use(...)` can be called in loops.
             if (
@@ -541,7 +664,9 @@ const rule = {
               context.report({
                 node: hook,
                 message:
-                  `React Hook "${getSourceCode().getText(hook)}" may be executed ` +
+                  `React Hook "${getSourceCode().getText(
+                    hook,
+                  )}" may be executed ` +
                   'more than once. Possibly because it is called in a loop. ' +
                   'React Hooks must be called in the exact same order in ' +
                   'every component render.',
@@ -582,9 +707,9 @@ const rule = {
                   'same order in every component render.' +
                   (possiblyHasEarlyReturn
                     ? ' Did you accidentally call a React Hook after an' +
-                      ' early return?'
+                    ' early return?'
                     : '');
-                context.report({node: hook, message});
+                context.report({ node: hook, message });
               }
             } else if (
               codePathNode.parent != null &&
@@ -592,14 +717,17 @@ const rule = {
                 // @ts-expect-error `ClassProperty` was removed from typescript-estree in https://github.com/typescript-eslint/typescript-eslint/pull/3806
                 codePathNode.parent.type === 'ClassProperty' ||
                 codePathNode.parent.type === 'PropertyDefinition') &&
-              codePathNode.parent.value === codePathNode
+              codePathNode.parent.value === codePathNode &&
+              isReactComponentClass(codePathNode.parent)
             ) {
               // Custom message for hooks inside a class
               const message =
-                `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
+                `React Hook "${getSourceCode().getText(
+                  hook,
+                )}" cannot be called ` +
                 'in a class component. React Hooks must be called in a ' +
                 'React function component or a custom React Hook function.';
-              context.report({node: hook, message});
+              context.report({ node: hook, message });
             } else if (codePathFunctionName) {
               // Custom message if we found an invalid function name.
               const message =
@@ -609,14 +737,16 @@ const rule = {
                 'React Hook function.' +
                 ' React component names must start with an uppercase letter.' +
                 ' React Hook names must start with the word "use".';
-              context.report({node: hook, message});
+              context.report({ node: hook, message });
             } else if (codePathNode.type === 'Program') {
               // These are dangerous if you have inline requires enabled.
               const message =
-                `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
+                `React Hook "${getSourceCode().getText(
+                  hook,
+                )}" cannot be called ` +
                 'at the top level. React Hooks must be called in a ' +
                 'React function component or a custom React Hook function.';
-              context.report({node: hook, message});
+              context.report({ node: hook, message });
             } else {
               // Assume in all other cases the user called a hook in some
               // random function callback. This should usually be true for
@@ -626,10 +756,12 @@ const rule = {
               // `use(...)` can be called in callbacks.
               if (isSomewhereInsideComponentOrHook && !isUseIdentifier(hook)) {
                 const message =
-                  `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
+                  `React Hook "${getSourceCode().getText(
+                    hook,
+                  )}" cannot be called ` +
                   'inside a callback. React Hooks must be called in a ' +
                   'React function component or a custom React Hook function.';
-                context.report({node: hook, message});
+                context.report({ node: hook, message });
               }
             }
           }
@@ -666,33 +798,47 @@ const rule = {
 
         // useEffectEvent: useEffectEvent functions can be passed by reference within useEffect as well as in
         // another useEffectEvent
+        // Check all `useEffect` and `React.useEffect`, `useEffectEvent`, and `React.useEffectEvent`
+        const nodeWithoutNamespace = getNodeWithoutReactNamespace(node.callee);
         if (
-          node.callee.type === 'Identifier' &&
-          (node.callee.name === 'useEffect' ||
-            isUseEffectEventIdentifier(node.callee)) &&
+          (isEffectIdentifier(nodeWithoutNamespace, additionalEffectHooks) ||
+            isUseEffectEventIdentifier(nodeWithoutNamespace)) &&
           node.arguments.length > 0
         ) {
           // Denote that we have traversed into a useEffect call, and stash the CallExpr for
           // comparison later when we exit
           lastEffect = node;
         }
+
+        // Specifically disallow <Child onClick={useEffectEvent(...)} /> because this
+        // case can't be caught by `recordAllUseEffectEventFunctions` as it isn't assigned to a variable
+        if (
+          isUseEffectEventIdentifier(nodeWithoutNamespace) &&
+          node.parent?.type !== 'VariableDeclarator' &&
+          // like in other hooks, calling useEffectEvent at component's top level without assignment is valid
+          node.parent?.type !== 'ExpressionStatement'
+        ) {
+          const message = useEffectEventError(null, false);
+
+          context.report({
+            node,
+            message,
+          });
+        }
       },
 
       Identifier(node) {
         // This identifier resolves to a useEffectEvent function, but isn't being referenced in an
         // effect or another event function. It isn't being called either.
-        if (
-          lastEffect == null &&
-          useEffectEventFunctions.has(node) &&
-          node.parent.type !== 'CallExpression'
-        ) {
+        if (lastEffect == null && useEffectEventFunctions.has(node)) {
+          const message = useEffectEventError(
+            getSourceCode().getText(node),
+            node.parent.type === 'CallExpression',
+          );
+
           context.report({
             node,
-            message:
-              `\`${getSourceCode().getText(
-                node,
-              )}\` is a function created with React Hook "useEffectEvent", and can only be called from ` +
-              'the same component. They cannot be assigned to variables or passed down.',
+            message,
           });
         }
       },
@@ -715,6 +861,18 @@ const rule = {
         if (isInsideComponentOrHook(node)) {
           recordAllUseEffectEventFunctions(getScope(node));
         }
+      },
+
+      // @ts-expect-error parser-hermes produces these node types
+      ComponentDeclaration(node) {
+        // component MyComponent() { const onClick = useEffectEvent(...) }
+        recordAllUseEffectEventFunctions(getScope(node));
+      },
+
+      // @ts-expect-error parser-hermes produces these node types
+      HookDeclaration(node) {
+        // hook useMyHook() { const onClick = useEffectEvent(...) }
+        recordAllUseEffectEventFunctions(getScope(node));
       },
     };
   },
