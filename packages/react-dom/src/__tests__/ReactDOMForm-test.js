@@ -1585,6 +1585,57 @@ describe('ReactDOMForm', () => {
     expect(divRef.current.textContent).toEqual('Current username: acdlite');
   });
 
+  it('should fire onReset on automatic form reset', async () => {
+    const formRef = React.createRef();
+    const inputRef = React.createRef();
+
+    let setValue;
+    const defaultValue = 0;
+    function App({promiseForUsername}) {
+      const [value, _setValue] = useState(defaultValue);
+      setValue = _setValue;
+
+      return (
+        <form
+          ref={formRef}
+          action={async formData => {
+            Scheduler.log(`Async action started`);
+            await getText('Wait');
+          }}
+          onReset={() => {
+            setValue(defaultValue);
+          }}>
+          <input
+            ref={inputRef}
+            text="text"
+            name="amount"
+            value={value}
+            onChange={event => setValue(event.currentTarget.value)}
+          />
+        </form>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    // Dirty the controlled input
+    await act(() => setValue('3'));
+    expect(inputRef.current.value).toEqual('3');
+
+    // Submit the form. This will trigger an async action.
+    await submit(formRef.current);
+    assertLog(['Async action started']);
+
+    // We haven't reset yet.
+    expect(inputRef.current.value).toEqual('3');
+
+    // Action completes. onReset has been fired and values reset manually.
+    await act(() => resolveText('Wait'));
+    assertLog([]);
+    expect(inputRef.current.value).toEqual('0');
+  });
+
   it('requestFormReset schedules a form reset after transition completes', async () => {
     // This is the same as the previous test, except the form is updated with
     // a userspace action instead of a built-in form action.
@@ -2280,5 +2331,65 @@ describe('ReactDOMForm', () => {
     await act(() => root.render(<Form action={new MyAction()} />));
     await submit(formRef.current);
     assertLog(['stringified action']);
+  });
+
+  it('form actions should retain status when nested state changes', async () => {
+    const formRef = React.createRef();
+
+    let rerenderUnrelatedStatus;
+    function UnrelatedStatus() {
+      const {pending} = useFormStatus();
+      const [counter, setCounter] = useState(0);
+      rerenderUnrelatedStatus = () => setCounter(n => n + 1);
+      Scheduler.log(`[unrelated form] pending: ${pending}, state: ${counter}`);
+    }
+
+    let rerenderTargetStatus;
+    function TargetStatus() {
+      const {pending} = useFormStatus();
+      const [counter, setCounter] = useState(0);
+      Scheduler.log(`[target form] pending: ${pending}, state: ${counter}`);
+      rerenderTargetStatus = () => setCounter(n => n + 1);
+    }
+
+    function App() {
+      async function action() {
+        return new Promise(resolve => {
+          // never resolves
+        });
+      }
+
+      return (
+        <>
+          <form action={action} ref={formRef}>
+            <input type="submit" />
+            <TargetStatus />
+          </form>
+          <form>
+            <UnrelatedStatus />
+          </form>
+        </>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    assertLog([
+      '[target form] pending: false, state: 0',
+      '[unrelated form] pending: false, state: 0',
+    ]);
+
+    await submit(formRef.current);
+
+    assertLog(['[target form] pending: true, state: 0']);
+
+    await act(() => rerenderTargetStatus());
+
+    assertLog(['[target form] pending: true, state: 1']);
+
+    await act(() => rerenderUnrelatedStatus());
+
+    assertLog(['[unrelated form] pending: false, state: 1']);
   });
 });
