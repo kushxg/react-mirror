@@ -139,7 +139,7 @@ describe('ReactDOMServerSelectiveHydrationActivity', () => {
     ReactDOMServer = require('react-dom/server');
     act = require('internal-test-utils').act;
     Scheduler = require('scheduler');
-    Activity = React.unstable_Activity;
+    Activity = React.Activity;
 
     const InternalTestUtils = require('internal-test-utils');
     assertLog = InternalTestUtils.assertLog;
@@ -717,7 +717,7 @@ describe('ReactDOMServerSelectiveHydrationActivity', () => {
     });
 
     // We should prioritize hydrating D first because we clicked it.
-    // but event isnt replayed
+    // but event isn't replayed
     assertLog([
       'D',
       'B', // Ideally this should be later.
@@ -849,7 +849,7 @@ describe('ReactDOMServerSelectiveHydrationActivity', () => {
     });
 
     // We should prioritize hydrating D first because we clicked it.
-    // but event isnt replayed
+    // but event isn't replayed
     assertLog([
       'D',
       'B', // Ideally this should be later.

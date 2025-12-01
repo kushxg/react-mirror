@@ -70,7 +70,13 @@ class SSABuilder {
     CompilerError.invariant(this.#current !== null, {
       reason: 'we need to be in a block to access state!',
       description: null,
-      loc: null,
+      details: [
+        {
+          kind: 'error',
+          loc: null,
+          message: null,
+        },
+      ],
       suggestions: null,
     });
     return this.#states.get(this.#current)!;
@@ -140,7 +146,7 @@ class SSABuilder {
 
     if (block.preds.size == 0) {
       /*
-       * We're at the entry block and haven't found our defintion yet.
+       * We're at the entry block and haven't found our definition yet.
        * console.log(
        *   `Unable to find "${printPlace(
        *     oldPlace
@@ -253,7 +259,13 @@ function enterSSAImpl(
     CompilerError.invariant(!visitedBlocks.has(block), {
       reason: `found a cycle! visiting bb${block.id} again`,
       description: null,
-      loc: null,
+      details: [
+        {
+          kind: 'error',
+          loc: null,
+          message: null,
+        },
+      ],
       suggestions: null,
     });
 
@@ -266,7 +278,13 @@ function enterSSAImpl(
       CompilerError.invariant(func.context.length === 0, {
         reason: `Expected function context to be empty for outer function declarations`,
         description: null,
-        loc: func.loc,
+        details: [
+          {
+            kind: 'error',
+            loc: func.loc,
+            message: null,
+          },
+        ],
         suggestions: null,
       });
       func.params = func.params.map(param => {
@@ -295,7 +313,13 @@ function enterSSAImpl(
           reason:
             'Expected function expression entry block to have zero predecessors',
           description: null,
-          loc: null,
+          details: [
+            {
+              kind: 'error',
+              loc: null,
+              message: null,
+            },
+          ],
           suggestions: null,
         });
         entry.preds.add(blockId);

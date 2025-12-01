@@ -595,7 +595,7 @@ describe('ReactSuspenseWithNoopRenderer', () => {
     );
 
     // Unblock the low-pri text and finish. Nothing in the UI changes because
-    // the update was overriden
+    // the update was overridden
     await act(() => resolveText('2'));
     assertLog(['2']);
     expect(ReactNoop).toMatchRenderedOutput(
@@ -4140,5 +4140,29 @@ describe('ReactSuspenseWithNoopRenderer', () => {
         <span prop="C" />
       </>,
     );
+  });
+
+  it('can rerender after resolving a promise', async () => {
+    const promise = Promise.resolve(null);
+    const root = ReactNoop.createRoot();
+
+    await act(() => {
+      startTransition(() => {
+        root.render(<Suspense>{promise}</Suspense>);
+      });
+    });
+
+    assertLog([]);
+    expect(root).toMatchRenderedOutput(null);
+
+    await act(() => {
+      startTransition(() => {
+        root.render(
+          <Suspense>
+            <div />
+          </Suspense>,
+        );
+      });
+    });
   });
 });

@@ -25,7 +25,7 @@ describe('ReactSiblingPrerendering', () => {
     waitForAll = require('internal-test-utils').waitForAll;
     startTransition = React.startTransition;
     Suspense = React.Suspense;
-    Activity = React.unstable_Activity;
+    Activity = React.Activity;
 
     textCache = new Map();
   });
@@ -318,7 +318,7 @@ describe('ReactSiblingPrerendering', () => {
       // to be updated.
       'Suspend! [C]',
 
-      // Now we're in prerender mode, so D is incuded in this attempt.
+      // Now we're in prerender mode, so D is included in this attempt.
       'Suspend! [C]',
       'Suspend! [D]',
     ]);

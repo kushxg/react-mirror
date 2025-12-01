@@ -46,7 +46,10 @@ import {
   createPublicRootInstance,
   type PublicRootInstance,
 } from 'react-native/Libraries/ReactPrivate/ReactNativePrivateInterface';
-import {disableLegacyMode} from 'shared/ReactFeatureFlags';
+import {
+  disableLegacyMode,
+  enableDefaultTransitionIndicator,
+} from 'shared/ReactFeatureFlags';
 
 if (typeof ReactFiberErrorDialog.showErrorDialog !== 'function') {
   throw new Error(
@@ -78,7 +81,7 @@ function nativeOnCaughtError(
   error: mixed,
   errorInfo: {
     +componentStack?: ?string,
-    +errorBoundary?: ?React$Component<any, any>,
+    +errorBoundary?: ?component(...props: any),
   },
 ): void {
   const errorBoundary = errorInfo.errorBoundary;
@@ -132,6 +135,12 @@ function render(
     if (options && options.onRecoverableError !== undefined) {
       onRecoverableError = options.onRecoverableError;
     }
+    let onDefaultTransitionIndicator = nativeOnDefaultTransitionIndicator;
+    if (enableDefaultTransitionIndicator) {
+      if (options && options.onDefaultTransitionIndicator !== undefined) {
+        onDefaultTransitionIndicator = options.onDefaultTransitionIndicator;
+      }
+    }
 
     const publicRootInstance = createPublicRootInstance(containerTag);
     const rootInstance = {
@@ -151,7 +160,7 @@ function render(
       onUncaughtError,
       onCaughtError,
       onRecoverableError,
-      nativeOnDefaultTransitionIndicator,
+      onDefaultTransitionIndicator,
       null,
     );
 
@@ -216,7 +225,7 @@ export {
   stopSurface,
   createPortal,
   // The public instance has a reference to the internal instance handle.
-  // This method allows it to acess the most recent shadow node for
+  // This method allows it to access the most recent shadow node for
   // the instance (it's only accessible through it).
   getNodeFromInternalInstanceHandle,
   // Fabric native methods to traverse the host tree return the same internal

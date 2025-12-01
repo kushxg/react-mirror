@@ -12,6 +12,7 @@ import {
   convertInspectedElementBackendToFrontend,
   hydrateHelper,
   inspectElement as inspectElementAPI,
+  inspectScreen as inspectScreenAPI,
 } from 'react-devtools-shared/src/backendAPI';
 import {fillInPath} from 'react-devtools-shared/src/hydration';
 
@@ -37,7 +38,7 @@ import type {
 // the backend will send a "no-change" message if the element hasn't updated (rendered) since the last time it was asked.
 // In this case, the frontend cache should reuse the previous (cached) value.
 // Using a WeakMap keyed on Element generally works well for this, since Elements are mutable and stable in the Store.
-// This doens't work properly though when component filters are changed,
+// This doesn't work properly though when component filters are changed,
 // because this will cause the Store to dump all roots and re-initialize the tree (recreating the Element objects).
 // So instead we key on Element ID (which is stable in this case) and use an LRU for eviction.
 const inspectedElementCache: LRUCache<number, InspectedElementFrontend> =
@@ -57,21 +58,31 @@ export function inspectElement(
   rendererID: number,
   shouldListenToPauseEvents: boolean = false,
 ): Promise<InspectElementReturnType> {
-  const {id} = element;
+  const {id, parentID} = element;
 
   // This could indicate that the DevTools UI has been closed and reopened.
   // The in-memory cache will be clear but the backend still thinks we have cached data.
   // In this case, we need to tell it to resend the full data.
   const forceFullData = !inspectedElementCache.has(id);
+  const isRoot = parentID === 0;
+  const promisedElement = isRoot
+    ? inspectScreenAPI(
+        bridge,
+        forceFullData,
+        id,
+        path,
+        shouldListenToPauseEvents,
+      )
+    : inspectElementAPI(
+        bridge,
+        forceFullData,
+        id,
+        path,
+        rendererID,
+        shouldListenToPauseEvents,
+      );
 
-  return inspectElementAPI(
-    bridge,
-    forceFullData,
-    id,
-    path,
-    rendererID,
-    shouldListenToPauseEvents,
-  ).then((data: any) => {
+  return promisedElement.then((data: any) => {
     const {type} = data;
 
     let inspectedElement;

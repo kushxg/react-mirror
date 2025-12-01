@@ -21,10 +21,11 @@ let ReactDOM;
 let ReactDOMClient;
 let ReactDOMFizzServer;
 let Suspense;
+let SuspenseList;
 let textCache;
 let loadCache;
 let writable;
-const CSPnonce = null;
+let CSPnonce = null;
 let container;
 let buffer = '';
 let hasErrored = false;
@@ -68,12 +69,14 @@ describe('ReactDOMFloat', () => {
       setTimeout(cb);
     container = document.getElementById('container');
 
+    CSPnonce = null;
     React = require('react');
     ReactDOM = require('react-dom');
     ReactDOMClient = require('react-dom/client');
     ReactDOMFizzServer = require('react-dom/server');
     Stream = require('stream');
     Suspense = React.Suspense;
+    SuspenseList = React.unstable_SuspenseList;
     Scheduler = require('scheduler/unstable_mock');
 
     const InternalTestUtils = require('internal-test-utils');
@@ -704,8 +707,14 @@ describe('ReactDOMFloat', () => {
         (gate(flags => flags.shouldUseFizzExternalRuntime)
           ? '<script src="react-dom/unstable_server-external-runtime" async=""></script>'
           : '') +
-        '<link rel="expect" href="#«R»" blocking="render"/><title>foo</title></head>' +
-        '<body>bar<template id="«R»"></template>',
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<link rel="expect" href="#_R_" blocking="render"/>'
+          : '') +
+        '<title>foo</title></head>' +
+        '<body>bar' +
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<template id="_R_"></template>'
+          : ''),
       '</body></html>',
     ]);
   });
@@ -745,7 +754,7 @@ describe('ReactDOMFloat', () => {
     ).toEqual(['<script src="src-of-external-runtime" async=""></script>']);
   });
 
-  it('can send style insertion implementation independent of boundary commpletion instruction implementation', async () => {
+  it('can send style insertion implementation independent of boundary completion instruction implementation', async () => {
     await act(() => {
       renderToPipeableStream(
         <html>
@@ -2824,7 +2833,7 @@ body {
       </html>,
     );
 
-    // We inject some styles, divs, scripts into the begginning, middle, and end
+    // We inject some styles, divs, scripts into the beginning, middle, and end
     // of the head / body.
     const injectedStyle = document.createElement('style');
     injectedStyle.textContent = 'body { background-color: blue; }';
@@ -2837,7 +2846,7 @@ body {
     document.head.prepend(injectedDiv);
     document.head.appendChild(injectedDiv.cloneNode(true));
     // We do not prepend a <div> in body because this will conflict with hyration
-    // We still mostly hydrate by matchign tag and <div> does not have any attributes to
+    // We still mostly hydrate by matching tag and <div> does not have any attributes to
     // differentiate between likely-inject and likely-rendered cases. If a <div> is prepended
     // in the <body> and you render a <div> as the first child of <body> there will be a conflict.
     // We consider this a rare edge case and even if it does happen the fallback to client rendering
@@ -4138,7 +4147,7 @@ body {
 
   it('uses imageSrcSet and imageSizes when keying image preloads', async () => {
     function App({isClient}) {
-      // Will key off href in absense of imageSrcSet
+      // Will key off href in absence of imageSrcSet
       ReactDOM.preload('foo', {as: 'image'});
       ReactDOM.preload('foo', {as: 'image'});
 
@@ -4158,7 +4167,7 @@ body {
         imageSizes: 'foosizes',
       });
 
-      // Will key off href in absense of imageSrcSet, imageSizes is ignored. these should match the
+      // Will key off href in absence of imageSrcSet, imageSizes is ignored. these should match the
       // first preloads not not emit a new preload tag
       ReactDOM.preload('foo', {as: 'image', imageSizes: 'foosizes'});
       ReactDOM.preload('foo', {as: 'image', imageSizes: 'foosizes'});
@@ -4177,7 +4186,7 @@ body {
       });
 
       if (isClient) {
-        // Will key off href in absense of imageSrcSet
+        // Will key off href in absence of imageSrcSet
         ReactDOM.preload('client', {as: 'image'});
         ReactDOM.preload('client', {as: 'image'});
 
@@ -4197,7 +4206,7 @@ body {
           imageSizes: 'clientsizes',
         });
 
-        // Will key off href in absense of imageSrcSet, imageSizes is ignored. these should match the
+        // Will key off href in absence of imageSrcSet, imageSizes is ignored. these should match the
         // first preloads not not emit a new preload tag
         ReactDOM.preload('client', {as: 'image', imageSizes: 'clientsizes'});
         ReactDOM.preload('client', {as: 'image', imageSizes: 'clientsizes'});
@@ -4572,7 +4581,7 @@ body {
           <link rel="preload" as="image" href="a" />
           {/* Stylesheets come in between high priority images and regular preloads */}
           <link rel="stylesheet" href="foo" data-precedence="default" />
-          {/* The remainig images that preloaded at regular priority */}
+          {/* The remaining images that preloaded at regular priority */}
           <link rel="preload" as="image" href="b" />
           <link rel="preload" as="image" href="11" />
           <link rel="preload" as="image" href="12" />
@@ -5735,6 +5744,181 @@ body {
           <div>inner blocked fallback</div>
           <link rel="preload" href="completed inner" as="style" />
           <link rel="preload" href="in fallback inner" as="style" />
+        </body>
+      </html>,
+    );
+  });
+
+  // @gate enableSuspenseList
+  it('delays "forwards" SuspenseList rows until the css of previous rows have completed', async () => {
+    await act(() => {
+      renderToPipeableStream(
+        <html>
+          <body>
+            <Suspense fallback="loading...">
+              <SuspenseList revealOrder="forwards" tail="visible">
+                <Suspense fallback="loading foo...">
+                  <BlockedOn value="foo">
+                    <link rel="stylesheet" href="foo" precedence="foo" />
+                    foo
+                  </BlockedOn>
+                </Suspense>
+                <Suspense fallback="loading bar...">bar</Suspense>
+                <BlockedOn value="bar">
+                  <Suspense fallback="loading baz...">
+                    <BlockedOn value="baz">baz</BlockedOn>
+                  </Suspense>
+                </BlockedOn>
+              </SuspenseList>
+            </Suspense>
+          </body>
+        </html>,
+      ).pipe(writable);
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head />
+        <body>loading...</body>
+      </html>,
+    );
+
+    // unblock css loading
+    await act(() => {
+      resolveText('foo');
+    });
+
+    // bar is still blocking the whole list
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    // unblock inner loading states
+    await act(() => {
+      resolveText('bar');
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+          {'loading baz...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    // resolve the last boundary
+    await act(() => {
+      resolveText('baz');
+    });
+
+    // still blocked on the css of the first row
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+          {'loading baz...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    await act(() => {
+      loadStylesheets();
+    });
+    await assertLog(['load stylesheet: foo']);
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'foo'}
+          {'bar'}
+          {'baz'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+  });
+
+  // @gate enableSuspenseList
+  it('delays "together" SuspenseList rows until the css of previous rows have completed', async () => {
+    await act(() => {
+      renderToPipeableStream(
+        <html>
+          <body>
+            <SuspenseList revealOrder="together">
+              <Suspense fallback="loading foo...">
+                <BlockedOn value="foo">
+                  <link rel="stylesheet" href="foo" precedence="foo" />
+                  foo
+                </BlockedOn>
+              </Suspense>
+              <Suspense fallback="loading bar...">bar</Suspense>
+            </SuspenseList>
+          </body>
+        </html>,
+      ).pipe(writable);
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head />
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+        </body>
+      </html>,
+    );
+
+    await act(() => {
+      resolveText('foo');
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'loading foo...'}
+          {'loading bar...'}
+          <link as="style" href="foo" rel="preload" />
+        </body>
+      </html>,
+    );
+
+    await act(() => {
+      loadStylesheets();
+    });
+    await assertLog(['load stylesheet: foo']);
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="stylesheet" href="foo" data-precedence="foo" />
+        </head>
+        <body>
+          {'foo'}
+          {'bar'}
+          <link as="style" href="foo" rel="preload" />
         </body>
       </html>,
     );
@@ -7207,7 +7391,6 @@ body {
       );
     });
 
-    // @gate favorSafetyOverHydrationPerf
     it('retains styles even when a new html, head, and/body mount', async () => {
       await act(() => {
         const {pipe} = renderToPipeableStream(
@@ -7751,13 +7934,13 @@ body {
       assertConsoleErrorDev(
         [
           'React encountered a `<link rel="stylesheet" .../>` with a `precedence` prop and ' +
-            'expected the `href` prop to be a non-empty string but ecountered `undefined` instead. ' +
+            'expected the `href` prop to be a non-empty string but encountered `undefined` instead. ' +
             'If your intent was to have React hoist and deduplciate this stylesheet using the ' +
             '`precedence` prop ensure there is a non-empty string `href` prop as well, ' +
             'otherwise remove the `precedence` prop.\n' +
             '    in link (at **)',
           'React encountered a `<link rel="stylesheet" .../>` with a `precedence` prop and ' +
-            'expected the `href` prop to be a non-empty string but ecountered an empty string instead. ' +
+            'expected the `href` prop to be a non-empty string but encountered an empty string instead. ' +
             'If your intent was to have React hoist and deduplciate this stylesheet using the ' +
             '`precedence` prop ensure there is a non-empty string `href` prop as well, ' +
             'otherwise remove the `precedence` prop.\n' +
@@ -8406,11 +8589,91 @@ background-color: green;
       });
       assertConsoleErrorDev([
         'React expected the `href` prop for a <style> tag opting into hoisting semantics ' +
-          'using the `precedence` prop to not have any spaces but ecountered spaces instead. ' +
+          'using the `precedence` prop to not have any spaces but encountered spaces instead. ' +
           'using spaces in this prop will cause hydration of this style to fail on the client. ' +
-          'The href for the <style> where this ocurred is "foo bar".\n' +
+          'The href for the <style> where this occurred is "foo bar".\n' +
           '    in style (at **)',
       ]);
+    });
+
+    it('can emit styles with nonce', async () => {
+      const nonce = 'R4nD0m';
+      const fooCss = '.foo { color: hotpink; }';
+      const barCss = '.bar { background-color: blue; }';
+      const bazCss = '.baz { border: 1px solid black; }';
+      await act(() => {
+        renderToPipeableStream(
+          <html>
+            <body>
+              <Suspense>
+                <BlockedOn value="first">
+                  <div>first</div>
+                  <style href="foo" precedence="default" nonce={nonce}>
+                    {fooCss}
+                  </style>
+                  <style href="bar" precedence="default" nonce={nonce}>
+                    {barCss}
+                  </style>
+                  <BlockedOn value="second">
+                    <div>second</div>
+                    <style href="baz" precedence="default" nonce={nonce}>
+                      {bazCss}
+                    </style>
+                  </BlockedOn>
+                </BlockedOn>
+              </Suspense>
+            </body>
+          </html>,
+          {nonce: {style: nonce}},
+        ).pipe(writable);
+      });
+
+      expect(getMeaningfulChildren(document)).toEqual(
+        <html>
+          <head />
+          <body />
+        </html>,
+      );
+
+      await act(() => {
+        resolveText('first');
+      });
+
+      expect(getMeaningfulChildren(document)).toEqual(
+        <html>
+          <head />
+          <body>
+            <style
+              data-href="foo bar"
+              data-precedence="default"
+              media="not all"
+              nonce={nonce}>
+              {`${fooCss}${barCss}`}
+            </style>
+          </body>
+        </html>,
+      );
+
+      await act(() => {
+        resolveText('second');
+      });
+
+      expect(getMeaningfulChildren(document)).toEqual(
+        <html>
+          <head>
+            <style data-href="foo bar" data-precedence="default" nonce={nonce}>
+              {`${fooCss}${barCss}`}
+            </style>
+            <style data-href="baz" data-precedence="default" nonce={nonce}>
+              {bazCss}
+            </style>
+          </head>
+          <body>
+            <div>first</div>
+            <div>second</div>
+          </body>
+        </html>,
+      );
     });
   });
 
@@ -9094,7 +9357,6 @@ background-color: green;
       ]);
     });
 
-    // @gate favorSafetyOverHydrationPerf
     it('can render a title before a singleton even if that singleton clears its contents', async () => {
       await act(() => {
         const {pipe} = renderToPipeableStream(
