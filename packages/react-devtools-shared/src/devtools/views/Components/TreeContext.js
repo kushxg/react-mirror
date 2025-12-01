@@ -57,6 +57,9 @@ export type StateContext = {
   ownerID: number | null,
   ownerFlatTree: Array<Element> | null,
 
+  // Activity slice
+  activityID: Element['id'] | null,
+
   // Inspection element panel
   inspectedElementID: number | null,
   inspectedElementIndex: number | null,
@@ -70,7 +73,7 @@ type ACTION_GO_TO_PREVIOUS_SEARCH_RESULT = {
 };
 type ACTION_HANDLE_STORE_MUTATION = {
   type: 'HANDLE_STORE_MUTATION',
-  payload: [Array<number>, Map<number, number>],
+  payload: [Array<number>, Map<number, number>, null | Element['id']],
 };
 type ACTION_RESET_OWNER_STACK = {
   type: 'RESET_OWNER_STACK',
@@ -166,6 +169,9 @@ type State = {
   // Owners
   ownerID: number | null,
   ownerFlatTree: Array<Element> | null,
+
+  // Activity slice
+  activityID: Element['id'] | null,
 
   // Inspection element panel
   inspectedElementID: number | null,
@@ -794,6 +800,33 @@ function reduceOwnersState(store: Store, state: State, action: Action): State {
   };
 }
 
+function reduceActivityState(
+  store: Store,
+  state: State,
+  action: Action,
+): State {
+  switch (action.type) {
+    case 'HANDLE_STORE_MUTATION':
+      let {activityID} = state;
+      const [, , activitySliceIDChange] = action.payload;
+      if (activitySliceIDChange === 0 && activityID !== null) {
+        activityID = null;
+      } else if (
+        activitySliceIDChange !== null &&
+        activitySliceIDChange !== activityID
+      ) {
+        activityID = activitySliceIDChange;
+      }
+      if (activityID !== state.activityID) {
+        return {
+          ...state,
+          activityID,
+        };
+      }
+  }
+  return state;
+}
+
 type Props = {
   children: React$Node,
 
@@ -802,6 +835,48 @@ type Props = {
   defaultInspectedElementID?: ?number,
   defaultInspectedElementIndex?: ?number,
 };
+
+function getInitialState({
+  defaultOwnerID,
+  defaultInspectedElementID,
+  defaultInspectedElementIndex,
+  store,
+}: {
+  defaultOwnerID?: ?number,
+  defaultInspectedElementID?: ?number,
+  defaultInspectedElementIndex?: ?number,
+  store: Store,
+}): State {
+  return {
+    // Tree
+    numElements: store.numElements,
+    ownerSubtreeLeafElementID: null,
+
+    // Search
+    searchIndex: null,
+    searchResults: [],
+    searchText: '',
+
+    // Owners
+    ownerID: defaultOwnerID == null ? null : defaultOwnerID,
+    ownerFlatTree: null,
+
+    // Activity slice
+    activityID: null,
+
+    // Inspection element panel
+    inspectedElementID:
+      defaultInspectedElementID != null
+        ? defaultInspectedElementID
+        : store.lastSelectedHostInstanceElementId,
+    inspectedElementIndex:
+      defaultInspectedElementIndex != null
+        ? defaultInspectedElementIndex
+        : store.lastSelectedHostInstanceElementId
+          ? store.getIndexOfElementID(store.lastSelectedHostInstanceElementId)
+          : null,
+  };
+}
 
 // TODO Remove TreeContextController wrapper element once global Context.write API exists.
 function TreeContextController({
@@ -843,6 +918,7 @@ function TreeContextController({
             state = reduceTreeState(store, state, action);
             state = reduceSearchState(store, state, action);
             state = reduceOwnersState(store, state, action);
+            state = reduceActivityState(store, state, action);
 
             // TODO(hoxyq): review
             // If the selected ID is in a collapsed subtree, reset the selected index to null.
@@ -866,32 +942,16 @@ function TreeContextController({
     [store],
   );
 
-  const [state, dispatch] = useReducer(reducer, {
-    // Tree
-    numElements: store.numElements,
-    ownerSubtreeLeafElementID: null,
-
-    // Search
-    searchIndex: null,
-    searchResults: [],
-    searchText: '',
-
-    // Owners
-    ownerID: defaultOwnerID == null ? null : defaultOwnerID,
-    ownerFlatTree: null,
-
-    // Inspection element panel
-    inspectedElementID:
-      defaultInspectedElementID != null
-        ? defaultInspectedElementID
-        : store.lastSelectedHostInstanceElementId,
-    inspectedElementIndex:
-      defaultInspectedElementIndex != null
-        ? defaultInspectedElementIndex
-        : store.lastSelectedHostInstanceElementId
-          ? store.getIndexOfElementID(store.lastSelectedHostInstanceElementId)
-          : null,
-  });
+  const [state, dispatch] = useReducer(
+    reducer,
+    {
+      defaultOwnerID,
+      defaultInspectedElementID,
+      defaultInspectedElementIndex,
+      store,
+    },
+    getInitialState,
+  );
   const transitionDispatch = useMemo(
     () => (action: Action) =>
       startTransition(() => {
@@ -927,13 +987,14 @@ function TreeContextController({
 
   // Mutations to the underlying tree may impact this context (e.g. search results, selection state).
   useEffect(() => {
-    const handleStoreMutated = ([addedElementIDs, removedElementIDs]: [
-      Array<number>,
-      Map<number, number>,
-    ]) => {
-      transitionDispatch({
+    const handleStoreMutated = ([
+      addedElementIDs,
+      removedElementIDs,
+      activitySliceIDChange,
+    ]: [Array<number>, Map<number, number>, null | Element['id']]) => {
+      dispatch({
         type: 'HANDLE_STORE_MUTATION',
-        payload: [addedElementIDs, removedElementIDs],
+        payload: [addedElementIDs, removedElementIDs, activitySliceIDChange],
       });
     };
 
@@ -942,9 +1003,9 @@ function TreeContextController({
       // At the moment, we can treat this as a mutation.
       // We don't know which Elements were newly added/removed, but that should be okay in this case.
       // It would only impact the search state, which is unlikely to exist yet at this point.
-      transitionDispatch({
+      dispatch({
         type: 'HANDLE_STORE_MUTATION',
-        payload: [[], new Map()],
+        payload: [[], new Map(), null],
       });
     }
 
@@ -972,7 +1033,14 @@ function recursivelySearchTree(
     return;
   }
 
-  const {children, displayName, hocDisplayNames, compiledWithForget} = element;
+  const {
+    children,
+    displayName,
+    hocDisplayNames,
+    compiledWithForget,
+    key,
+    nameProp,
+  } = element;
   if (displayName != null && regExp.test(displayName) === true) {
     searchResults.push(elementID);
   } else if (
@@ -982,6 +1050,10 @@ function recursivelySearchTree(
   ) {
     searchResults.push(elementID);
   } else if (compiledWithForget && regExp.test('Forget')) {
+    searchResults.push(elementID);
+  } else if (typeof key === 'string' && regExp.test(key)) {
+    searchResults.push(elementID);
+  } else if (typeof nameProp === 'string' && regExp.test(nameProp)) {
     searchResults.push(elementID);
   }
 
