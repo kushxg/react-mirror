@@ -48,6 +48,12 @@ export const bindToConsole = $$$config.bindToConsole;
 export const resetResumableState = $$$config.resetResumableState;
 export const completeResumableState = $$$config.completeResumableState;
 export const getChildFormatContext = $$$config.getChildFormatContext;
+export const getSuspenseFallbackFormatContext =
+  $$$config.getSuspenseFallbackFormatContext;
+export const getSuspenseContentFormatContext =
+  $$$config.getSuspenseContentFormatContext;
+export const getViewTransitionFormatContext =
+  $$$config.getViewTransitionFormatContext;
 export const makeId = $$$config.makeId;
 export const pushTextInstance = $$$config.pushTextInstance;
 export const pushStartInstance = $$$config.pushStartInstance;
@@ -61,6 +67,10 @@ export const writeCompletedRoot = $$$config.writeCompletedRoot;
 export const writePlaceholder = $$$config.writePlaceholder;
 export const pushStartActivityBoundary = $$$config.pushStartActivityBoundary;
 export const pushEndActivityBoundary = $$$config.pushEndActivityBoundary;
+export const pushStartSuspenseListBoundary =
+  $$$config.pushStartSuspenseListBoundary;
+export const pushEndSuspenseListBoundary =
+  $$$config.pushEndSuspenseListBoundary;
 export const writeStartCompletedSuspenseBoundary =
   $$$config.writeStartCompletedSuspenseBoundary;
 export const writeStartPendingSuspenseBoundary =
@@ -98,4 +108,5 @@ export const writeHoistablesForBoundary = $$$config.writeHoistablesForBoundary;
 export const writePostamble = $$$config.writePostamble;
 export const hoistHoistables = $$$config.hoistHoistables;
 export const createHoistableState = $$$config.createHoistableState;
+export const hasSuspenseyContent = $$$config.hasSuspenseyContent;
 export const emitEarlyPreloads = $$$config.emitEarlyPreloads;

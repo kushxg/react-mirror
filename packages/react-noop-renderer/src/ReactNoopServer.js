@@ -34,6 +34,10 @@ type ActivityInstance = {
   children: Array<Instance | TextInstance | SuspenseInstance>,
 };
 
+type SuspenseListInstance = {
+  children: Array<Instance | TextInstance | SuspenseInstance>,
+};
+
 type SuspenseInstance = {
   state: 'pending' | 'complete' | 'client-render',
   children: Array<Instance | TextInstance | SuspenseInstance>,
@@ -102,6 +106,16 @@ const ReactNoopServer = ReactFizzServer({
   byteLengthOfChunk: null,
 
   getChildFormatContext(): null {
+    return null;
+  },
+  getSuspenseFallbackFormatContext(): null {
+    return null;
+  },
+  getSuspenseContentFormatContext(): null {
+    return null;
+  },
+
+  getViewTransitionFormatContext(): null {
     return null;
   },
 
@@ -184,6 +198,23 @@ const ReactNoopServer = ReactFizzServer({
   },
 
   pushEndActivityBoundary(
+    target: Array<Uint8Array>,
+    renderState: RenderState,
+  ): void {
+    target.push(POP);
+  },
+
+  pushStartSuspenseListBoundary(
+    target: Array<Uint8Array>,
+    renderState: RenderState,
+  ): void {
+    const suspenseListInstance: SuspenseListInstance = {
+      children: [],
+    };
+    target.push(Buffer.from(JSON.stringify(suspenseListInstance), 'utf8'));
+  },
+
+  pushEndSuspenseListBoundary(
     target: Array<Uint8Array>,
     renderState: RenderState,
   ): void {
@@ -314,6 +345,9 @@ const ReactNoopServer = ReactFizzServer({
   writeHoistablesForBoundary() {},
   writePostamble() {},
   hoistHoistables(parent: HoistableState, child: HoistableState) {},
+  hasSuspenseyContent(hoistableState: HoistableState): boolean {
+    return false;
+  },
   createHoistableState(): HoistableState {
     return null;
   },
@@ -352,6 +386,7 @@ function render(children: React$Element<any>, options?: Options): Destination {
   };
   const request = ReactNoopServer.createRequest(
     children,
+    null,
     null,
     null,
     options ? options.progressiveChunkSize : undefined,
