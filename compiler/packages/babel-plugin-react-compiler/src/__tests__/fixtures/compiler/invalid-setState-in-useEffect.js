@@ -1,9 +1,12 @@
-// @loggerTestOnly @validateNoSetStateInPassiveEffects
-import {useEffect, useState} from 'react';
+// @loggerTestOnly @validateNoSetStateInEffects
+import React, {useEffect, useState} from 'react';
 
 function Component() {
   const [state, setState] = useState(0);
   useEffect(() => {
+    setState(s => s + 1);
+  });
+  React.useEffect(() => {
     setState(s => s + 1);
   });
   return state;
