@@ -17,6 +17,7 @@ import type {
   Awaited,
   ReactComponentInfo,
   ReactDebugInfo,
+  ReactKey,
 } from 'shared/ReactTypes';
 import type {TransitionTypes} from 'react/src/ReactTransitionType';
 import type {WorkTag} from './ReactWorkTags';
@@ -100,7 +101,7 @@ export type Fiber = {
   tag: WorkTag,
 
   // Unique identifier of this child.
-  key: null | string,
+  key: ReactKey,
 
   // The value of element.type which is used to preserve the identity during
   // reconciliation of this child.
@@ -200,7 +201,7 @@ export type Fiber = {
 
   _debugInfo?: ReactDebugInfo | null,
   _debugOwner?: ReactComponentInfo | Fiber | null,
-  _debugStack?: string | Error | null,
+  _debugStack?: Error | null,
   _debugTask?: ConsoleTask | null,
   _debugNeedsRemount?: boolean,
 
@@ -248,6 +249,7 @@ type BaseFiberRootProperties = {
   pingedLanes: Lanes,
   warmLanes: Lanes,
   expiredLanes: Lanes,
+  indicatorLanes: Lanes, // enableDefaultTransitionIndicator only
   errorRecoveryDisabledLanes: Lanes,
   shellSuspendCounter: number,
 
@@ -272,7 +274,7 @@ type BaseFiberRootProperties = {
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
@@ -280,7 +282,9 @@ type BaseFiberRootProperties = {
     errorInfo: {+componentStack?: ?string},
   ) => void,
 
+  // enableDefaultTransitionIndicator only
   onDefaultTransitionIndicator: () => void | (() => void),
+  pendingIndicator: null | (() => void),
 
   formState: ReactFormState<any, any> | null,
 
@@ -456,6 +460,7 @@ export type Dispatcher = {
 
 export type AsyncDispatcher = {
   getCacheForType: <T>(resourceType: () => T) => T,
+  cacheSignal: () => null | AbortSignal,
   // DEV-only
   getOwner: () => null | Fiber | ReactComponentInfo | ComponentStackNode,
 };
