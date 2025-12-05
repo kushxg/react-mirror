@@ -2,7 +2,6 @@
   "name": "react-server-dom-unbundled",
   "description": "React Server Components bindings for DOM using Node.js. This only exists for internal testing.",
   "version": "0.0.0",
-  "private": true,
   "files": [
     "LICENSE",
     "README.md",
