@@ -145,11 +145,10 @@ export function commitHookEffectListMount(
   try {
     const updateQueue: FunctionComponentUpdateQueue | null =
       (finishedWork.updateQueue: any);
-    const lastEffect = updateQueue !== null ? updateQueue.lastEffect : null;
-    if (lastEffect !== null) {
-      const firstEffect = lastEffect.next;
-      let effect = firstEffect;
-      do {
+    const effects = updateQueue !== null ? updateQueue.effects : null;
+    if (effects !== null) {
+      for (let i = 0; i < effects.length; i++) {
+        const effect = effects[i];
         if ((effect.tag & flags) === flags) {
           if (enableSchedulingProfiler) {
             if ((flags & HookPassive) !== NoHookEffect) {
@@ -237,8 +236,7 @@ export function commitHookEffectListMount(
             }
           }
         }
-        effect = effect.next;
-      } while (effect !== firstEffect);
+      }
     }
   } catch (error) {
     captureCommitPhaseError(finishedWork, finishedWork.return, error);
@@ -253,11 +251,10 @@ export function commitHookEffectListUnmount(
   try {
     const updateQueue: FunctionComponentUpdateQueue | null =
       (finishedWork.updateQueue: any);
-    const lastEffect = updateQueue !== null ? updateQueue.lastEffect : null;
-    if (lastEffect !== null) {
-      const firstEffect = lastEffect.next;
-      let effect = firstEffect;
-      do {
+    const effects = updateQueue !== null ? updateQueue.effects : null;
+    if (effects !== null) {
+      for (let i = 0; i < effects.length; i++) {
+        const effect = effects[i];
         if ((effect.tag & flags) === flags) {
           // Unmount
           const inst = effect.inst;
@@ -293,8 +290,7 @@ export function commitHookEffectListUnmount(
             }
           }
         }
-        effect = effect.next;
-      } while (effect !== firstEffect);
+      }
     }
   } catch (error) {
     captureCommitPhaseError(finishedWork, finishedWork.return, error);
@@ -410,7 +406,6 @@ export function commitClassLayoutLifecycles(
     const prevProps = resolveClassComponentProps(
       finishedWork.type,
       current.memoizedProps,
-      finishedWork.elementType === finishedWork.type,
     );
     const prevState = current.memoizedState;
     // We could update instance props and state here,
@@ -671,7 +666,6 @@ export function commitClassSnapshot(finishedWork: Fiber, current: Fiber) {
     const resolvedPrevProps = resolveClassComponentProps(
       finishedWork.type,
       prevProps,
-      finishedWork.elementType === finishedWork.type,
     );
     let snapshot;
     if (__DEV__) {
@@ -716,7 +710,6 @@ export function safelyCallComponentWillUnmount(
   instance.props = resolveClassComponentProps(
     current.type,
     current.memoizedProps,
-    current.elementType === current.type,
   );
   instance.state = current.memoizedState;
   if (shouldProfile(current)) {
