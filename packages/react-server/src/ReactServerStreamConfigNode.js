@@ -38,7 +38,11 @@ export function flushBuffered(destination: Destination) {
   }
 }
 
-const VIEW_SIZE = 2048;
+// Chunks larger than VIEW_SIZE are written directly, without copying into the
+// internal view buffer. This must be at least half of Node's internal Buffer
+// pool size (8192) to avoid corrupting the pool when using
+// renderToReadableStream, which uses a byte stream that detaches ArrayBuffers.
+const VIEW_SIZE = 4096;
 let currentView = null;
 let writtenBytes = 0;
 let destinationHasCapacity = true;
@@ -72,7 +76,9 @@ function writeStringChunk(destination: Destination, stringChunk: string) {
   if (writtenBytes > 0) {
     target = ((currentView: any): Uint8Array).subarray(writtenBytes);
   }
-  const {read, written} = textEncoder.encodeInto(stringChunk, target);
+  const {read, written} =
+    // $FlowFixMe[prop-missing] flow-typed missing encodeInto method
+    textEncoder.encodeInto(stringChunk, target);
   writtenBytes += written;
 
   if (read < stringChunk.length) {
@@ -81,6 +87,7 @@ function writeStringChunk(destination: Destination, stringChunk: string) {
       (currentView: any).subarray(0, writtenBytes),
     );
     currentView = new Uint8Array(VIEW_SIZE);
+    // $FlowFixMe[prop-missing] flow-typed missing encodeInto method
     writtenBytes = textEncoder.encodeInto(
       stringChunk.slice(read),
       (currentView: any),
@@ -189,7 +196,7 @@ export function close(destination: Destination) {
   destination.end();
 }
 
-const textEncoder = new TextEncoder();
+export const textEncoder: TextEncoder = new TextEncoder();
 
 export function stringToChunk(content: string): Chunk {
   return content;
@@ -228,6 +235,7 @@ export function byteLengthOfBinaryChunk(chunk: BinaryChunk): number {
 
 export function closeWithError(destination: Destination, error: mixed): void {
   // $FlowFixMe[incompatible-call]: This is an Error object or the destination accepts other types.
+  // $FlowFixMe[incompatible-type]
   destination.destroy(error);
 }
 

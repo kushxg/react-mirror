@@ -9,13 +9,22 @@
 
 /* global Bun */
 
+import type {Writable} from 'stream';
+
 type BunReadableStreamController = ReadableStreamController & {
   end(): mixed,
   write(data: Chunk | BinaryChunk): void,
   error(error: Error): void,
   flush?: () => void,
 };
-export type Destination = BunReadableStreamController;
+
+interface MightBeFlushable {
+  flush?: () => void;
+}
+
+export type Destination =
+  | BunReadableStreamController
+  | (Writable & MightBeFlushable);
 
 export type PrecomputedChunk = string;
 export opaque type Chunk = string;
@@ -46,6 +55,8 @@ export function writeChunk(
     return;
   }
 
+  // $FlowFixMe[incompatible-call]: write() is compatible with both types in Bun
+  // $FlowFixMe[incompatible-type]
   destination.write(chunk);
 }
 
@@ -53,6 +64,8 @@ export function writeChunkAndReturn(
   destination: Destination,
   chunk: PrecomputedChunk | Chunk | BinaryChunk,
 ): boolean {
+  // $FlowFixMe[incompatible-call]: write() is compatible with both types in Bun
+  // $FlowFixMe[incompatible-type]
   return !!destination.write(chunk);
 }
 
@@ -86,10 +99,23 @@ export function byteLengthOfBinaryChunk(chunk: BinaryChunk): number {
 }
 
 export function closeWithError(destination: Destination, error: mixed): void {
+  // $FlowFixMe[incompatible-use]
+  // $FlowFixMe[method-unbinding]
   if (typeof destination.error === 'function') {
     // $FlowFixMe[incompatible-call]: This is an Error object or the destination accepts other types.
+    // $FlowFixMe[incompatible-type]
     destination.error(error);
-  } else {
+
+    // $FlowFixMe[incompatible-use]
+    // $FlowFixMe[method-unbinding]
+  } else if (typeof destination.destroy === 'function') {
+    // $FlowFixMe[incompatible-call]: This is an Error object or the destination accepts other types.
+    // $FlowFixMe[incompatible-type]
+    destination.destroy(error);
+
+    // $FlowFixMe[incompatible-use]
+    // $FlowFixMe[method-unbinding]
+  } else if (typeof destination.close === 'function') {
     // Earlier implementations doesn't support this method. In that environment you're
     // supposed to throw from a promise returned but we don't return a promise in our
     // approach. We could fork this implementation but this is environment is an edge
@@ -100,7 +126,7 @@ export function closeWithError(destination: Destination, error: mixed): void {
   }
 }
 
-export function createFastHash(input: string): string | number {
+export function createFastHash(input: string): number {
   return Bun.hash(input);
 }
 

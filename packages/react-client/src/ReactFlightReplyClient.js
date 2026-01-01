@@ -18,13 +18,10 @@ import type {
 import type {LazyComponent} from 'react/src/ReactLazy';
 import type {TemporaryReferenceSet} from './ReactFlightTemporaryReferences';
 
-import {enableRenderableContext} from 'shared/ReactFeatureFlags';
-
 import {
   REACT_ELEMENT_TYPE,
   REACT_LAZY_TYPE,
   REACT_CONTEXT_TYPE,
-  REACT_PROVIDER_TYPE,
   getIteratorFn,
   ASYNC_ITERATOR,
 } from 'shared/ReactSymbols';
@@ -538,6 +535,7 @@ export function processReply(
 
       if (isArray(value)) {
         // $FlowFixMe[incompatible-return]
+        // $FlowFixMe[incompatible-type]
         return value;
       }
       // TODO: Should we the Object.prototype.toString.call() to test for cross-realm objects?
@@ -555,6 +553,7 @@ export function processReply(
         // $FlowFixMe[prop-missing]: FormData has forEach.
         value.forEach((originalValue: string | File, originalKey: string) => {
           // $FlowFixMe[incompatible-call]
+          // $FlowFixMe[incompatible-type]
           data.append(prefix + originalKey, originalValue);
         });
         return serializeFormDataReference(refId);
@@ -648,6 +647,7 @@ export function processReply(
       const iteratorFn = getIteratorFn(value);
       if (iteratorFn) {
         const iterator = iteratorFn.call(value);
+        // $FlowFixMe[invalid-compare]
         if (iterator === value) {
           // Iterator, not Iterable
           const iteratorId = nextPartId++;
@@ -699,10 +699,7 @@ export function processReply(
         return serializeTemporaryReferenceMarker();
       }
       if (__DEV__) {
-        if (
-          (value: any).$$typeof ===
-          (enableRenderableContext ? REACT_CONTEXT_TYPE : REACT_PROVIDER_TYPE)
-        ) {
+        if ((value: any).$$typeof === REACT_CONTEXT_TYPE) {
           console.error(
             'React Context Providers cannot be passed to Server Functions from the Client.%s',
             describeObjectForErrorMessage(parent, key),
@@ -835,6 +832,7 @@ export function processReply(
     }
     modelRoot = model;
     // $FlowFixMe[incompatible-return] it's not going to be undefined because we'll encode it.
+    // $FlowFixMe[incompatible-type]
     return JSON.stringify(model, resolveToJSON);
   }
 
@@ -861,6 +859,7 @@ export function processReply(
     formData.set(formFieldPrefix + '0', json);
     if (pendingParts === 0) {
       // $FlowFixMe[incompatible-call] this has already been refined.
+      // $FlowFixMe[incompatible-type]
       resolve(formData);
     }
   }
@@ -940,6 +939,7 @@ function defaultEncodeFormAction(
     // $FlowFixMe[prop-missing]
     encodedFormData.forEach((value: string | File, key: string) => {
       // $FlowFixMe[incompatible-call]
+      // $FlowFixMe[incompatible-type]
       prefixedData.append('$ACTION_' + identifierPrefix + ':' + key, value);
     });
     data = prefixedData;
@@ -970,6 +970,7 @@ function customEncodeFormAction(
     );
   }
   let boundPromise: Promise<Array<any>> = (referenceClosure.bound: any);
+  // $FlowFixMe[invalid-compare]
   if (boundPromise === null) {
     boundPromise = Promise.resolve([]);
   }
@@ -1101,7 +1102,7 @@ function createFakeServerFunction<A: Iterable<any>, T>(
   }
 
   if (sourceMap) {
-    // We use the prefix rsc://React/ to separate these from other files listed in
+    // We use the prefix about://React/ to separate these from other files listed in
     // the Chrome DevTools. We need a "host name" and not just a protocol because
     // otherwise the group name becomes the root folder. Ideally we don't want to
     // show these at all but there's two reasons to assign a fake URL.
@@ -1109,10 +1110,10 @@ function createFakeServerFunction<A: Iterable<any>, T>(
     // 2) If source maps are disabled or fails, you should at least be able to tell
     //    which file it was.
     code +=
-      '\n//# sourceURL=rsc://React/' +
+      '\n//# sourceURL=about://React/' +
       encodeURIComponent(environmentName) +
       '/' +
-      filename +
+      encodeURI(filename) +
       '?s' + // We add an extra s here to distinguish from the fake stack frames
       fakeServerFunctionIdx++;
     code += '\n//# sourceMappingURL=' + sourceMap;
@@ -1189,7 +1190,8 @@ function bind(this: Function): Function {
   const referenceClosure = knownServerReferences.get(this);
 
   if (!referenceClosure) {
-    // $FlowFixMe[prop-missing]
+    // $FlowFixMe[incompatible-call]
+    // $FlowFixMe[incompatible-type]
     return FunctionBind.apply(this, arguments);
   }
 

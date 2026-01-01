@@ -29,7 +29,6 @@ import {
 } from './ReactFiberFlags';
 
 import is from 'shared/objectIs';
-import {enableRenderableContext} from 'shared/ReactFeatureFlags';
 import {getHostTransitionProvider} from './ReactFiberHostContext';
 
 const valueCursor: StackCursor<mixed> = createCursor(null);
@@ -81,6 +80,7 @@ export function pushProvider<T>(
   context: ReactContext<T>,
   nextValue: T,
 ): void {
+  // $FlowFixMe[constant-condition]
   if (isPrimaryRenderer) {
     push(valueCursor, context._currentValue, providerFiber);
 
@@ -128,6 +128,7 @@ export function popProvider(
 ): void {
   const currentValue = valueCursor.current;
 
+  // $FlowFixMe[constant-condition]
   if (isPrimaryRenderer) {
     context._currentValue = currentValue;
     if (__DEV__) {
@@ -233,6 +234,7 @@ function propagateContextChanges<T>(
         findContext: for (let i = 0; i < contexts.length; i++) {
           const context: ReactContext<T> = contexts[i];
           // Check if the context matches.
+          // $FlowFixMe[invalid-compare]
           if (dependency.context === context) {
             // Match! Schedule an update on this fiber.
 
@@ -389,13 +391,7 @@ function propagateParentContextChanges(
 
       const oldProps = currentParent.memoizedProps;
       if (oldProps !== null) {
-        let context: ReactContext<any>;
-        if (enableRenderableContext) {
-          context = parent.type;
-        } else {
-          context = parent.type._context;
-        }
-
+        const context: ReactContext<any> = parent.type;
         const newProps = parent.pendingProps;
         const newValue = newProps.value;
 
@@ -480,6 +476,7 @@ export function checkIfContextChanged(
   let dependency = currentDependencies.firstContext;
   while (dependency !== null) {
     const context = dependency.context;
+    // $FlowFixMe[constant-condition]
     const newValue = isPrimaryRenderer
       ? context._currentValue
       : context._currentValue2;
@@ -537,6 +534,7 @@ function readContextForConsumer<T>(
   consumer: Fiber | null,
   context: ReactContext<T>,
 ): T {
+  // $FlowFixMe[constant-condition]
   const value = isPrimaryRenderer
     ? context._currentValue
     : context._currentValue2;
@@ -558,20 +556,24 @@ function readContextForConsumer<T>(
     }
 
     // This is the first dependency for this component. Create a new list.
+    // $FlowFixMe[incompatible-type]
     lastContextDependency = contextItem;
     consumer.dependencies = __DEV__
-      ? {
+      ? // $FlowFixMe[incompatible-type]
+        {
           lanes: NoLanes,
           firstContext: contextItem,
           _debugThenableState: null,
         }
-      : {
+      : // $FlowFixMe[incompatible-type]
+        {
           lanes: NoLanes,
           firstContext: contextItem,
         };
     consumer.flags |= NeedsPropagation;
   } else {
     // Append a new context item.
+    // $FlowFixMe[incompatible-type]
     lastContextDependency = lastContextDependency.next = contextItem;
   }
   return value;

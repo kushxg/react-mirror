@@ -146,7 +146,7 @@ function createSyntheticEvent(Interface: EventInterfaceType) {
  * @interface Event
  * @see http://www.w3.org/TR/DOM-Level-3-Events/
  */
-const EventInterface = {
+const EventInterface: EventInterfaceType = {
   eventPhase: 0,
   bubbles: 0,
   cancelable: 0,
@@ -168,7 +168,7 @@ export const SyntheticUIEvent: $FlowFixMe =
 
 let lastMovementX;
 let lastMovementY;
-let lastMouseEvent;
+let lastMouseEvent: ?{[propName: string]: mixed};
 
 function updateMouseMovementPolyfillState(event: {[propName: string]: mixed}) {
   if (event !== lastMouseEvent) {
@@ -229,6 +229,7 @@ const MouseEventInterface: EventInterfaceType = {
     return lastMovementY;
   },
 };
+
 export const SyntheticMouseEvent: $FlowFixMe =
   createSyntheticEvent(MouseEventInterface);
 
@@ -391,6 +392,7 @@ function getEventKey(nativeEvent: {[propName: string]: mixed}) {
   if (nativeEvent.type === 'keypress') {
     const charCode = getEventCharCode(
       // $FlowFixMe[incompatible-call] unable to narrow to `KeyboardEvent`
+      // $FlowFixMe[incompatible-type]
       nativeEvent,
     );
 
@@ -441,7 +443,7 @@ function getEventModifierState(nativeEvent: {[propName: string]: mixed}) {
  * @interface KeyboardEvent
  * @see http://www.w3.org/TR/DOM-Level-3-Events/
  */
-const KeyboardEventInterface = {
+const KeyboardEventInterface: EventInterfaceType = {
   ...UIEventInterface,
   key: getEventKey,
   code: 0,
@@ -463,6 +465,7 @@ const KeyboardEventInterface = {
     if (event.type === 'keypress') {
       return getEventCharCode(
         // $FlowFixMe[incompatible-call] unable to narrow to `KeyboardEvent`
+        // $FlowFixMe[incompatible-type]
         event,
       );
     }
@@ -487,6 +490,7 @@ const KeyboardEventInterface = {
     if (event.type === 'keypress') {
       return getEventCharCode(
         // $FlowFixMe[incompatible-call] unable to narrow to `KeyboardEvent`
+        // $FlowFixMe[incompatible-type]
         event,
       );
     }
@@ -504,7 +508,7 @@ export const SyntheticKeyboardEvent: $FlowFixMe = createSyntheticEvent(
  * @interface PointerEvent
  * @see http://www.w3.org/TR/pointerevents/
  */
-const PointerEventInterface = {
+const PointerEventInterface: EventInterfaceType = {
   ...MouseEventInterface,
   pointerId: 0,
   width: 0,
@@ -525,7 +529,7 @@ export const SyntheticPointerEvent: $FlowFixMe = createSyntheticEvent(
  * @interface TouchEvent
  * @see http://www.w3.org/TR/touch-events/
  */
-const TouchEventInterface = {
+const TouchEventInterface: EventInterfaceType = {
   ...UIEventInterface,
   touches: 0,
   targetTouches: 0,
@@ -544,7 +548,7 @@ export const SyntheticTouchEvent: $FlowFixMe =
  * @see http://www.w3.org/TR/2009/WD-css3-transitions-20090320/#transition-events-
  * @see https://developer.mozilla.org/en-US/docs/Web/API/TransitionEvent
  */
-const TransitionEventInterface = {
+const TransitionEventInterface: EventInterfaceType = {
   ...EventInterface,
   propertyName: 0,
   elapsedTime: 0,
@@ -558,7 +562,7 @@ export const SyntheticTransitionEvent: $FlowFixMe = createSyntheticEvent(
  * @interface WheelEvent
  * @see http://www.w3.org/TR/DOM-Level-3-Events/
  */
-const WheelEventInterface = {
+const WheelEventInterface: EventInterfaceType = {
   ...MouseEventInterface,
   deltaX(event: {[propName: string]: mixed}) {
     return 'deltaX' in event
@@ -593,7 +597,7 @@ const WheelEventInterface = {
 export const SyntheticWheelEvent: $FlowFixMe =
   createSyntheticEvent(WheelEventInterface);
 
-const ToggleEventInterface = {
+const ToggleEventInterface: EventInterfaceType = {
   ...EventInterface,
   newState: 0,
   oldState: 0,

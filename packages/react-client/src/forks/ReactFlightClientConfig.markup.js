@@ -62,7 +62,13 @@ export function requireModule<T>(metadata: ClientReference<T>): T {
   );
 }
 
-export const usedWithSSR = true;
+export function getModuleDebugInfo<T>(metadata: ClientReference<T>): null {
+  throw new Error(
+    'renderToHTML should not have emitted Client References. This is a bug in React.',
+  );
+}
+
+export const usedWithSSR: boolean = true;
 
 type HintCode = string;
 type HintModel<T: HintCode> = null; // eslint-disable-line no-unused-vars

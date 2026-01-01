@@ -7,7 +7,7 @@
  * @flow
  */
 
-import type {ReactComponentInfo} from 'shared/ReactTypes';
+import type {ReactComponentInfo, ReactAsyncInfo} from 'shared/ReactTypes';
 import type {LazyComponent} from 'react/src/ReactLazy';
 
 import {
@@ -37,7 +37,8 @@ export type ComponentStackNode = {
     | string
     | Function
     | LazyComponent<any, any>
-    | ReactComponentInfo,
+    | ReactComponentInfo
+    | ReactAsyncInfo,
   owner?: null | ReactComponentInfo | ComponentStackNode, // DEV only
   stack?: null | string | Error, // DEV only
 };
@@ -64,6 +65,7 @@ function describeComponentStackByType(
       return describeFunctionComponentFrame(type);
     }
   }
+  // $FlowFixMe[invalid-compare]
   if (typeof type === 'object' && type !== null) {
     switch (type.$$typeof) {
       case REACT_FORWARD_REF_TYPE: {
@@ -86,7 +88,7 @@ function describeComponentStackByType(
       }
     }
     if (typeof type.name === 'string') {
-      return describeDebugInfoFrame(type.name, type.env);
+      return describeDebugInfoFrame(type.name, type.env, type.debugLocation);
     }
   }
   switch (type) {

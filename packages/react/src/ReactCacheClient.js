@@ -8,9 +8,12 @@
  */
 
 import {disableClientCache} from 'shared/ReactFeatureFlags';
-import {cache as cacheImpl} from './ReactCacheImpl';
+import {
+  cache as cacheImpl,
+  cacheSignal as cacheSignalImpl,
+} from './ReactCacheImpl';
 
-export function noopCache<A: Iterable<mixed>, T>(fn: (...A) => T): (...A) => T {
+function noopCache<A: Iterable<mixed>, T>(fn: (...A) => T): (...A) => T {
   // On the client (i.e. not a Server Components environment) `cache` has
   // no caching behavior. We just return the function as-is.
   //
@@ -25,6 +28,7 @@ export function noopCache<A: Iterable<mixed>, T>(fn: (...A) => T): (...A) => T {
   // accidentally depend on those details.
   return function () {
     // $FlowFixMe[incompatible-call]: We don't want to use rest arguments since we transpile the code.
+    // $FlowFixMe[incompatible-type]
     return fn.apply(null, arguments);
   };
 }
@@ -32,3 +36,11 @@ export function noopCache<A: Iterable<mixed>, T>(fn: (...A) => T): (...A) => T {
 export const cache: typeof noopCache = disableClientCache
   ? noopCache
   : cacheImpl;
+
+function noopCacheSignal(): null | AbortSignal {
+  return null;
+}
+
+export const cacheSignal: () => null | AbortSignal = disableClientCache
+  ? noopCacheSignal
+  : cacheSignalImpl;

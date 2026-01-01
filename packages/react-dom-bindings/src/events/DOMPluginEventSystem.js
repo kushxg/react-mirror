@@ -407,7 +407,7 @@ export function listenToNativeEventForNonManagedEventTarget(
   isCapturePhaseListener: boolean,
   target: EventTarget,
 ): void {
-  let eventSystemFlags = IS_EVENT_HANDLE_NON_MANAGED_NODE;
+  let eventSystemFlags: number = IS_EVENT_HANDLE_NON_MANAGED_NODE;
   const listenerSet = getEventListenerSet(target);
   const listenerSetKey = getListenerSetKey(
     domEventName,
@@ -446,6 +446,7 @@ export function listenToAllSupportedEvents(rootContainerElement: EventTarget) {
       (rootContainerElement: any).nodeType === DOCUMENT_NODE
         ? rootContainerElement
         : (rootContainerElement: any).ownerDocument;
+    // $FlowFixMe[invalid-compare]
     if (ownerDocument !== null) {
       // The selectionchange event also needs deduplication
       // but it is attached to the document.
@@ -925,6 +926,8 @@ function accumulateEnterLeaveListenersForEvent(
             createDispatchListener(instance, captureListener, currentTarget),
           );
         }
+      // $FlowFixMe[constant-condition]
+      // $FlowFixMe[invalid-compare]
       } else if (!inCapturePhase) {
         const bubbleListener = getListener(instance, registrationName);
         if (bubbleListener != null) {

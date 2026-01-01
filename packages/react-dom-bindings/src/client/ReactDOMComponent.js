@@ -72,6 +72,7 @@ import {
   enableScrollEndPolyfill,
   enableSrcObject,
   enableTrustedTypesIntegration,
+  enableViewTransition,
 } from 'shared/ReactFeatureFlags';
 import {
   mediaEventTypes,
@@ -2053,6 +2054,7 @@ function hydrateAttribute(
           if (__DEV__) {
             checkAttributeStringCoercion(value, propKey);
           }
+          // $FlowFixMe[invalid-compare]
           if (serverValue === '' + value) {
             return;
           }
@@ -2117,6 +2119,7 @@ function hydrateOverloadedBooleanAttribute(
       case 'symbol':
         return;
       default:
+        // $FlowFixMe[invalid-compare]
         if (value === false) {
           return;
         }
@@ -2131,6 +2134,7 @@ function hydrateOverloadedBooleanAttribute(
         case 'symbol':
           break;
         case 'boolean':
+          // $FlowFixMe[invalid-compare]
           if (value === true && serverValue === '') {
             return;
           }
@@ -2139,6 +2143,7 @@ function hydrateOverloadedBooleanAttribute(
           if (__DEV__) {
             checkAttributeStringCoercion(value, propKey);
           }
+          // $FlowFixMe[invalid-compare]
           if (serverValue === '' + value) {
             return;
           }
@@ -2230,6 +2235,7 @@ function hydrateNumericAttribute(
           if (__DEV__) {
             checkAttributeStringCoercion(value, propKey);
           }
+          // $FlowFixMe[invalid-compare]
           if (serverValue === '' + value) {
             return;
           }
@@ -2281,6 +2287,7 @@ function hydratePositiveNumericAttribute(
           if (__DEV__) {
             checkAttributeStringCoercion(value, propKey);
           }
+          // $FlowFixMe[invalid-compare]
           if (serverValue === '' + value) {
             return;
           }
@@ -3217,6 +3224,18 @@ export function diffHydratedProperties(
           break;
         case 'selected':
           break;
+        case 'vt-name':
+        case 'vt-update':
+        case 'vt-enter':
+        case 'vt-exit':
+        case 'vt-share':
+          if (enableViewTransition) {
+            // View Transition annotations are expected from the Server Runtime.
+            // However, if they're also specified on the client and don't match
+            // that's an error.
+            break;
+          }
+        // Fallthrough
         default:
           // Intentionally use the original name.
           // See discussion in https://github.com/facebook/react/pull/10676.

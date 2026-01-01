@@ -22,10 +22,7 @@ import {
 import {isFiberSuspenseAndTimedOut} from './ReactFiberTreeReflection';
 
 import {HostComponent, ScopeComponent, ContextProvider} from './ReactWorkTags';
-import {
-  enableScopeAPI,
-  enableRenderableContext,
-} from 'shared/ReactFeatureFlags';
+import {enableScopeAPI} from 'shared/ReactFeatureFlags';
 
 function getSuspenseFallbackChild(fiber: Fiber): Fiber | null {
   return ((((fiber.child: any): Fiber).sibling: any): Fiber).child;
@@ -43,6 +40,7 @@ function collectScopedNodes(
       const {type, memoizedProps, stateNode} = node;
       const instance = getPublicInstance(stateNode);
       if (
+        // $FlowFixMe[invalid-compare]
         instance !== null &&
         fn(type, memoizedProps || emptyObject, instance) === true
       ) {
@@ -68,6 +66,7 @@ function collectFirstScopedNode(
     if (node.tag === HostComponent) {
       const {type, memoizedProps, stateNode} = node;
       const instance = getPublicInstance(stateNode);
+      // $FlowFixMe[invalid-compare]
       if (instance !== null && fn(type, memoizedProps, instance) === true) {
         return instance;
       }
@@ -116,10 +115,7 @@ function collectNearestContextValues<T>(
   context: ReactContext<T>,
   childContextValues: Array<T>,
 ): void {
-  if (
-    node.tag === ContextProvider &&
-    (enableRenderableContext ? node.type : node.type._context) === context
-  ) {
+  if (node.tag === ContextProvider && node.type === context) {
     const contextValue = node.memoizedProps.value;
     childContextValues.push(contextValue);
   } else {

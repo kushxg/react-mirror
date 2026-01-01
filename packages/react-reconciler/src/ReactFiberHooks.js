@@ -55,7 +55,6 @@ import {
   ConcurrentMode,
   StrictEffectsMode,
   StrictLegacyMode,
-  NoStrictPassiveEffectsMode,
 } from './ReactTypeOfMode';
 import {
   NoLane,
@@ -74,6 +73,7 @@ import {
   includesSomeLane,
   isGestureRender,
   GestureLane,
+  UpdateLanes,
 } from './ReactFiberLane';
 import {
   ContinuousEventPriority,
@@ -123,7 +123,10 @@ import {
   markStateUpdateScheduled,
   setIsStrictModeForDevtools,
 } from './ReactFiberDevToolsHook';
-import {startUpdateTimerByLane} from './ReactProfilerTimer';
+import {
+  startUpdateTimerByLane,
+  startHostActionTimer,
+} from './ReactProfilerTimer';
 import {createCache} from './ReactFiberCacheComponent';
 import {
   createUpdate as createLegacyQueueUpdate,
@@ -413,9 +416,9 @@ function warnIfAsyncClientComponent(Component: Function) {
     // for transpiled async functions. Neither mechanism is completely
     // bulletproof but together they cover the most common cases.
     const isAsyncFunction =
-      // $FlowIgnore[method-unbinding]
+      // $FlowFixMe[method-unbinding]
       Object.prototype.toString.call(Component) === '[object AsyncFunction]' ||
-      // $FlowIgnore[method-unbinding]
+      // $FlowFixMe[method-unbinding]
       Object.prototype.toString.call(Component) ===
         '[object AsyncGeneratorFunction]';
     if (isAsyncFunction) {
@@ -1146,6 +1149,7 @@ function useThenable<T>(thenable: Thenable<T>): T {
 }
 
 function use<T>(usable: Usable<T>): T {
+  // $FlowFixMe[invalid-compare]
   if (usable !== null && typeof usable === 'object') {
     // $FlowFixMe[method-unbinding]
     if (typeof usable.then === 'function') {
@@ -1206,7 +1210,7 @@ function useMemoCache(size: number): Array<mixed> {
               ? currentMemoCache.data
               : // Clone the memo cache before each render (copy-on-write)
                 currentMemoCache.data.map(array => array.slice()),
-            index: 0,
+            index: 0 as number,
           };
         }
       }
@@ -1216,7 +1220,7 @@ function useMemoCache(size: number): Array<mixed> {
   if (memoCache == null) {
     memoCache = {
       data: [],
-      index: 0,
+      index: 0 as number,
     };
   }
   if (updateQueue === null) {
@@ -1524,6 +1528,7 @@ function updateReducerImpl<S, A>(
         }
       }
       update = update.next;
+      // $FlowFixMe[invalid-compare]
     } while (update !== null && update !== first);
 
     if (newBaseQueueLast === null) {
@@ -1863,7 +1868,7 @@ function subscribeToStore<T>(
     // read from the store.
     if (checkIfSnapshotChanged(inst)) {
       // Force a re-render.
-      startUpdateTimerByLane(SyncLane, 'updateSyncExternalStore()');
+      startUpdateTimerByLane(SyncLane, 'updateSyncExternalStore()', fiber);
       forceStoreRerender(fiber);
     }
   };
@@ -2470,6 +2475,7 @@ function updateActionStateImpl<S, P>(
   let state: Awaited<S>;
   if (
     typeof actionResult === 'object' &&
+    // $FlowFixMe[invalid-compare]
     actionResult !== null &&
     // $FlowFixMe[method-unbinding]
     typeof actionResult.then === 'function'
@@ -2644,6 +2650,7 @@ function updateEffectImpl(
       const prevEffect: Effect = currentHook.memoizedState;
       const prevDeps = prevEffect.deps;
       // $FlowFixMe[incompatible-call] (@poteto)
+      // $FlowFixMe[incompatible-type]
       if (areHookInputsEqual(nextDeps, prevDeps)) {
         hook.memoizedState = pushSimpleEffect(
           hookFlags,
@@ -2672,8 +2679,7 @@ function mountEffect(
 ): void {
   if (
     __DEV__ &&
-    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode &&
-    (currentlyRenderingFiber.mode & NoStrictPassiveEffectsMode) === NoMode
+    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode
   ) {
     mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
@@ -2725,6 +2731,7 @@ function mountEvent<Args, Return, F: (...Array<Args>) => Return>(
   const ref = {impl: callback};
   hook.memoizedState = ref;
   // $FlowIgnore[incompatible-return]
+  // $FlowFixMe[incompatible-type]
   return function eventFn() {
     if (isInvalidExecutionContextForEventFunction()) {
       throw new Error(
@@ -2741,7 +2748,8 @@ function updateEvent<Args, Return, F: (...Array<Args>) => Return>(
   const hook = updateWorkInProgressHook();
   const ref = hook.memoizedState;
   useEffectEventImpl({ref, nextImpl: callback});
-  // $FlowIgnore[incompatible-return]
+  // $FlowFixMe[incompatible-return]
+  // $FlowFixMe[incompatible-type]
   return function eventFn() {
     if (isInvalidExecutionContextForEventFunction()) {
       throw new Error(
@@ -2832,6 +2840,7 @@ function mountImperativeHandle<T>(
       console.error(
         'Expected useImperativeHandle() second argument to be a function ' +
           'that creates a handle. Instead received: %s.',
+        // $FlowFixMe[invalid-compare]
         create !== null ? typeof create : 'null',
       );
     }
@@ -2866,6 +2875,7 @@ function updateImperativeHandle<T>(
       console.error(
         'Expected useImperativeHandle() second argument to be a function ' +
           'that creates a handle. Instead received: %s.',
+        // $FlowFixMe[invalid-compare]
         create !== null ? typeof create : 'null',
       );
     }
@@ -2982,6 +2992,20 @@ function rerenderDeferredValue<T>(value: T, initialValue?: T): T {
   }
 }
 
+function isRenderingDeferredWork(): boolean {
+  if (!includesSomeLane(renderLanes, DeferredLane)) {
+    // None of the render lanes are deferred lanes.
+    return false;
+  }
+  // At least one of the render lanes are deferred lanes. However, if the
+  // current render is also batched together with an update, then we can't
+  // say that the render is wholly the result of deferred work. We can check
+  // this by checking if the root render lanes contain any "update" lanes, i.e.
+  // lanes that are only assigned to updates, like setState.
+  const rootRenderLanes = getWorkInProgressRootRenderLanes();
+  return !includesSomeLane(rootRenderLanes, UpdateLanes);
+}
+
 function mountDeferredValueImpl<T>(hook: Hook, value: T, initialValue?: T): T {
   if (
     // When `initialValue` is provided, we defer the initial render even if the
@@ -2990,7 +3014,7 @@ function mountDeferredValueImpl<T>(hook: Hook, value: T, initialValue?: T): T {
     // However, to avoid waterfalls, we do not defer if this render
     // was itself spawned by an earlier useDeferredValue. Check if DeferredLane
     // is part of the render lanes.
-    !includesSomeLane(renderLanes, DeferredLane)
+    !isRenderingDeferredWork()
   ) {
     // Render with the initial value
     hook.memoizedState = initialValue;
@@ -3037,8 +3061,7 @@ function updateDeferredValueImpl<T>(
     }
 
     const shouldDeferValue =
-      !includesOnlyNonUrgentLanes(renderLanes) &&
-      !includesSomeLane(renderLanes, DeferredLane);
+      !includesOnlyNonUrgentLanes(renderLanes) && !isRenderingDeferredWork();
     if (shouldDeferValue) {
       // This is an urgent update. Since the value has changed, keep using the
       // previous value and spawn a deferred render to update it later.
@@ -3240,6 +3263,8 @@ export function startHostTransition<F>(
     Thenable<TransitionStatus> | TransitionStatus,
     BasicStateAction<Thenable<TransitionStatus> | TransitionStatus>,
   > = stateHook.queue;
+
+  startHostActionTimer(formFiber);
 
   startTransition(
     formFiber,
@@ -3446,7 +3471,7 @@ function mountId(): string {
     const treeId = getTreeId();
 
     // Use a captial R prefix for server-generated ids.
-    id = '\u00AB' + identifierPrefix + 'R' + treeId;
+    id = '_' + identifierPrefix + 'R_' + treeId;
 
     // Unless this is the first id at this level, append a number at the end
     // that represents the position of this useId hook among all the useId
@@ -3456,16 +3481,11 @@ function mountId(): string {
       id += 'H' + localId.toString(32);
     }
 
-    id += '\u00BB';
+    id += '_';
   } else {
     // Use a lowercase r prefix for client-generated ids.
     const globalClientId = globalClientIdCounter++;
-    id =
-      '\u00AB' +
-      identifierPrefix +
-      'r' +
-      globalClientId.toString(32) +
-      '\u00BB';
+    id = '_' + identifierPrefix + 'r_' + globalClientId.toString(32) + '_';
   }
 
   hook.memoizedState = id;
@@ -3506,7 +3526,7 @@ function refreshCache<T>(fiber: Fiber, seedKey: ?() => T, seedValue: T): void {
         const refreshUpdate = createLegacyQueueUpdate(lane);
         const root = enqueueLegacyQueueUpdate(provider, refreshUpdate, lane);
         if (root !== null) {
-          startUpdateTimerByLane(lane, 'refresh()');
+          startUpdateTimerByLane(lane, 'refresh()', fiber);
           scheduleUpdateOnFiber(root, provider, lane);
           entangleLegacyQueueTransitions(root, provider, lane);
         }
@@ -3575,7 +3595,7 @@ function dispatchReducerAction<S, A>(
   } else {
     const root = enqueueConcurrentHookUpdate(fiber, queue, update, lane);
     if (root !== null) {
-      startUpdateTimerByLane(lane, 'dispatch()');
+      startUpdateTimerByLane(lane, 'dispatch()', fiber);
       scheduleUpdateOnFiber(root, fiber, lane);
       entangleTransitionUpdate(root, queue, lane);
     }
@@ -3609,7 +3629,7 @@ function dispatchSetState<S, A>(
     lane,
   );
   if (didScheduleUpdate) {
-    startUpdateTimerByLane(lane, 'setState()');
+    startUpdateTimerByLane(lane, 'setState()', fiber);
   }
   markUpdateInDevTools(fiber, lane, action);
 }
@@ -3771,7 +3791,7 @@ function dispatchOptimisticSetState<S, A>(
       // will never be attempted before the optimistic update. This currently
       // holds because the optimistic update is always synchronous. If we ever
       // change that, we'll need to account for this.
-      startUpdateTimerByLane(lane, 'setOptimistic()');
+      startUpdateTimerByLane(lane, 'setOptimistic()', fiber);
       scheduleUpdateOnFiber(root, fiber, lane);
       // Optimistic updates are always synchronous, so we don't need to call
       // entangleTransitionUpdate here.
