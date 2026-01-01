@@ -14,8 +14,8 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 // Our current version of JSDOM doesn't implement the event dispatching
 // so we polyfill it.
 const NativeFormData = global.FormData;
-const FormDataPolyfill = function FormData(form) {
-  const formData = new NativeFormData(form);
+const FormDataPolyfill = function FormData(form, submitter) {
+  const formData = new NativeFormData(form, submitter);
   const formDataEvent = new Event('formdata', {
     bubbles: true,
     cancelable: false,
@@ -489,11 +489,16 @@ describe('ReactDOMForm', () => {
     const inputRef = React.createRef();
     const buttonRef = React.createRef();
     const outsideButtonRef = React.createRef();
+    const imageButtonRef = React.createRef();
     let button;
+    let buttonX;
+    let buttonY;
     let title;
 
     function action(formData) {
       button = formData.get('button');
+      buttonX = formData.get('button.x');
+      buttonY = formData.get('button.y');
       title = formData.get('title');
     }
 
@@ -508,6 +513,12 @@ describe('ReactDOMForm', () => {
             <button name="button" value="edit" ref={buttonRef}>
               Edit
             </button>
+            <input
+              type="image"
+              name="button"
+              href="/some/image.png"
+              ref={imageButtonRef}
+            />
           </form>
           <form id="form" action={action}>
             <input type="text" name="title" defaultValue="hello" />
@@ -546,9 +557,12 @@ describe('ReactDOMForm', () => {
     expect(button).toBe('outside');
     expect(title).toBe('hello');
 
-    // Ensure that the type field got correctly restored
-    expect(inputRef.current.getAttribute('type')).toBe('submit');
-    expect(buttonRef.current.getAttribute('type')).toBe(null);
+    await submit(imageButtonRef.current);
+
+    expect(button).toBe(null);
+    expect(buttonX).toBe('0');
+    expect(buttonY).toBe('0');
+    expect(title).toBe('hello');
   });
 
   it('excludes the submitter name when the submitter is a function action', async () => {
@@ -2280,5 +2294,153 @@ describe('ReactDOMForm', () => {
     await act(() => root.render(<Form action={new MyAction()} />));
     await submit(formRef.current);
     assertLog(['stringified action']);
+  });
+
+  it('form actions should retain status when nested state changes', async () => {
+    const formRef = React.createRef();
+
+    let rerenderUnrelatedStatus;
+    function UnrelatedStatus() {
+      const {pending} = useFormStatus();
+      const [counter, setCounter] = useState(0);
+      rerenderUnrelatedStatus = () => setCounter(n => n + 1);
+      Scheduler.log(`[unrelated form] pending: ${pending}, state: ${counter}`);
+    }
+
+    let rerenderTargetStatus;
+    function TargetStatus() {
+      const {pending} = useFormStatus();
+      const [counter, setCounter] = useState(0);
+      Scheduler.log(`[target form] pending: ${pending}, state: ${counter}`);
+      rerenderTargetStatus = () => setCounter(n => n + 1);
+    }
+
+    function App() {
+      async function action() {
+        return new Promise(resolve => {
+          // never resolves
+        });
+      }
+
+      return (
+        <>
+          <form action={action} ref={formRef}>
+            <input type="submit" />
+            <TargetStatus />
+          </form>
+          <form>
+            <UnrelatedStatus />
+          </form>
+        </>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    assertLog([
+      '[target form] pending: false, state: 0',
+      '[unrelated form] pending: false, state: 0',
+    ]);
+
+    await submit(formRef.current);
+
+    assertLog(['[target form] pending: true, state: 0']);
+
+    await act(() => rerenderTargetStatus());
+
+    assertLog(['[target form] pending: true, state: 1']);
+
+    await act(() => rerenderUnrelatedStatus());
+
+    assertLog(['[unrelated form] pending: false, state: 1']);
+  });
+
+  it('controlled select elements maintain their value after form reset', async () => {
+    const formRef = React.createRef();
+    const selectRef = React.createRef();
+    const inputRef = React.createRef();
+
+    function App() {
+      const [selectedType, setSelectedType] = useState('2');
+      const [inputValue, setInputValue] = useState('test');
+
+      return (
+        <form
+          ref={formRef}
+          action={async () => {
+            Scheduler.log('Action started');
+            // Simulate async action
+            await getText('Action complete');
+            Scheduler.log('Action completed');
+          }}>
+          <select
+            ref={selectRef}
+            value={selectedType}
+            onChange={e => {
+              Scheduler.log(`Select changed to: ${e.target.value}`);
+              setSelectedType(e.target.value);
+            }}>
+            <option value="1">Type 1</option>
+            <option value="2">Type 2</option>
+            <option value="3">Type 3</option>
+          </select>
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputValue}
+            onChange={e => {
+              Scheduler.log(`Input changed to: ${e.target.value}`);
+              setInputValue(e.target.value);
+            }}
+          />
+        </form>
+      );
+    }
+
+    // Initial render
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    // Verify initial values
+    expect(selectRef.current.value).toBe('2');
+    expect(inputRef.current.value).toBe('test');
+
+    // User changes the controlled select value
+    await act(() => {
+      selectRef.current.value = '3';
+      const event = new Event('change', {bubbles: true, cancelable: true});
+      selectRef.current.dispatchEvent(event);
+    });
+    assertLog(['Select changed to: 3']);
+
+    // User changes the controlled input value
+    await act(() => {
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      ).set;
+      nativeInputValueSetter.call(inputRef.current, 'modified');
+      const event = new Event('input', {bubbles: true, cancelable: true});
+      inputRef.current.dispatchEvent(event);
+    });
+    assertLog(['Input changed to: modified']);
+
+    // Verify values changed
+    expect(selectRef.current.value).toBe('3');
+    expect(inputRef.current.value).toBe('modified');
+
+    // Submit the form, which will trigger automatic reset
+    await submit(formRef.current);
+    assertLog(['Action started']);
+
+    // Complete the action
+    await act(() => resolveText('Action complete'));
+    assertLog(['Action completed']);
+
+    // After form reset, controlled components should maintain their values
+    // This is the fix for issue #30580
+    expect(selectRef.current.value).toBe('3');
+    expect(inputRef.current.value).toBe('modified');
   });
 });
