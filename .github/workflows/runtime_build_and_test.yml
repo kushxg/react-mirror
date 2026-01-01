@@ -3,9 +3,19 @@ name: (Runtime) Build and Test
 on:
   push:
     branches: [main]
+    tags:
+      # To get CI for backport releases.
+      # This will duplicate CI for releases from main which is acceptable
+      - "v*"
   pull_request:
     paths-ignore:
       - compiler/**
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        required: false
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -26,18 +36,18 @@ jobs:
     name: Cache Runtime node_modules
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
       - name: Check cache hit
         uses: actions/cache/restore@v4
         id: node_modules
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
           lookup-only: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: steps.node_modules.outputs.cache-hit != 'true'
         with:
           node-version-file: '.nvmrc'
@@ -49,10 +59,8 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Save cache
@@ -61,24 +69,24 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
 
   runtime_compiler_node_modules_cache:
     name: Cache Runtime, Compiler node_modules
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
       - name: Check cache hit
         uses: actions/cache/restore@v4
         id: node_modules
         with:
           path: |
             **/node_modules
-          key: runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
+          key: runtime-and-compiler-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
           lookup-only: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: steps.node_modules.outputs.cache-hit != 'true'
         with:
           node-version-file: '.nvmrc'
@@ -92,10 +100,8 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
-          restore-keys: |
-            runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-and-compiler-node_modules-v6-
+          key: runtime-and-compiler-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - run: yarn --cwd compiler install --frozen-lockfile
@@ -106,7 +112,7 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
+          key: runtime-and-compiler-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
 
   # ----- FLOW -----
   discover_flow_inline_configs:
@@ -115,10 +121,10 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.result }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/github-script@v7
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/github-script@v8
         id: set-matrix
         with:
           script: |
@@ -134,10 +140,10 @@ jobs:
       matrix:
         flow_inline_config_shortname: ${{ fromJSON(needs.discover_flow_inline_configs.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -148,10 +154,8 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
@@ -164,10 +168,10 @@ jobs:
     needs: [runtime_node_modules_cache]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -178,17 +182,15 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - run: |
           yarn generate-inline-fizz-runtime
-          git diff --quiet || (echo "There was a change to the Fizz runtime. Run `yarn generate-inline-fizz-runtime` and check in the result." && false)
+          git diff --exit-code || (echo "There was a change to the Fizz runtime. Run \`yarn generate-inline-fizz-runtime\` and check in the result." && false)
 
   # ----- FEATURE FLAGS -----
   flags:
@@ -196,10 +198,10 @@ jobs:
     needs: [runtime_node_modules_cache]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -210,7 +212,7 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
@@ -252,10 +254,10 @@ jobs:
           - 4/5
           - 5/5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -268,10 +270,8 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
-          restore-keys: |
-            runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-and-compiler-node_modules-v6-
+          key: runtime-and-compiler-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
@@ -279,6 +279,37 @@ jobs:
       - run: yarn --cwd compiler install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - run: yarn test ${{ matrix.params }} --ci --shard=${{ matrix.shard }}
+
+  # Hardcoded to improve parallelism
+  test-linter:
+    name: Test eslint-plugin-react-hooks
+    needs: [runtime_compiler_node_modules_cache]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: yarn
+          cache-dependency-path:  |
+            yarn.lock
+            compiler/yarn.lock
+      - name: Restore cached node_modules
+        uses: actions/cache@v5
+        id: node_modules
+        with:
+          path: |
+            **/node_modules
+          key: runtime-and-compiler-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
+      - name: Install runtime dependencies
+        run: yarn install --frozen-lockfile
+        if: steps.node_modules.outputs.cache-hit != 'true'
+      - name: Install compiler dependencies
+        run: yarn install --frozen-lockfile
+        working-directory: compiler
+        if: steps.node_modules.outputs.cache-hit != 'true'
+      - run: ./scripts/react-compiler/build-compiler.sh && ./scripts/react-compiler/link-compiler.sh
+      - run: yarn workspace eslint-plugin-react-hooks test
 
   # ----- BUILD -----
   build_and_lint:
@@ -292,17 +323,17 @@ jobs:
         worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]
         release_channel: [stable, experimental]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
           cache-dependency-path: |
             yarn.lock
             compiler/yarn.lock
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 11.0.22
@@ -312,10 +343,8 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
-          restore-keys: |
-            runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-and-compiler-node_modules-v6-
+          key: runtime-and-compiler-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
@@ -332,7 +361,7 @@ jobs:
       - name: Display structure of build
         run: ls -R build
       - name: Archive build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: _build_${{ matrix.worker_id }}_${{ matrix.release_channel }}
           path: build
@@ -387,10 +416,10 @@ jobs:
           - 10/10
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -403,10 +432,8 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
-          restore-keys: |
-            runtime-and-compiler-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-and-compiler-node_modules-v6-
+          key: runtime-and-compiler-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock', 'compiler/yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
@@ -414,7 +441,7 @@ jobs:
       - run: yarn --cwd compiler install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
@@ -432,10 +459,10 @@ jobs:
       attestations: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -446,23 +473,21 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
           merge-multiple: true
       - name: Display structure of build
         run: ls -R build
-      - run: echo ${{ github.event.pull_request.head.sha || github.sha }} >> build/COMMIT_SHA
+      - run: echo ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }} >> build/COMMIT_SHA
       - name: Scrape warning messages
         run: |
           mkdir -p ./build/__test_utils__
@@ -473,7 +498,7 @@ jobs:
       - run: cp ./build.tgz ./build2.tgz
       - name: Archive build artifacts
         id: upload_artifacts_combined
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: artifacts_combined
           path: |
@@ -497,10 +522,10 @@ jobs:
     needs: [build_and_lint, runtime_node_modules_cache]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -511,16 +536,14 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
@@ -530,17 +553,17 @@ jobs:
       - name: Search build artifacts for unminified errors
         run: |
           yarn extract-errors
-          git diff --quiet || (echo "Found unminified errors. Either update the error codes map or disable error minification for the affected build, if appropriate." && false)
+          git diff --exit-code || (echo "Found unminified errors. Either update the error codes map or disable error minification for the affected build, if appropriate." && false)
 
   check_release_dependencies:
     name: Check release dependencies
     needs: [build_and_lint, runtime_node_modules_cache]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -551,16 +574,14 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
@@ -574,16 +595,16 @@ jobs:
     needs: build_and_lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
           cache-dependency-path: yarn.lock
       - name: Restore cached node_modules
-        uses: actions/cache@v4 # note: this does not reuse centralized cache since it has unique cache key
+        uses: actions/cache@v5 # note: this does not reuse centralized cache since it has unique cache key
         id: node_modules
         with:
           path: |
@@ -594,7 +615,7 @@ jobs:
       - run: yarn --cwd fixtures/dom install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
@@ -615,10 +636,10 @@ jobs:
     needs: build_and_lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -627,7 +648,7 @@ jobs:
       # That means dependencies of the built packages are not installed.
       # We need to install dependencies of the workroot to fulfill all dependency constraints
       - name: Restore cached node_modules
-        uses: actions/cache@v4 # note: this does not reuse centralized cache since it has unique cache key
+        uses: actions/cache@v5 # note: this does not reuse centralized cache since it has unique cache key
         id: node_modules
         with:
           path: |
@@ -644,7 +665,7 @@ jobs:
         run: echo "playwright_version=$(npm ls @playwright/test | grep @playwright | sed 's/.*@//' | head -1)" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright Browsers for version ${{ steps.playwright_version.outputs.playwright_version }}
         id: cache_playwright_browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-browsers-v6-${{ runner.arch }}-${{ runner.os }}-${{ steps.playwright_version.outputs.playwright_version }}
@@ -653,7 +674,7 @@ jobs:
         working-directory: fixtures/flight
         run: npx playwright install --with-deps chromium
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
@@ -667,13 +688,13 @@ jobs:
           # Otherwise the webserver is a blackbox
           DEBUG: pw:webserver
       - name: Archive Flight fixture artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: flight-playwright-report
           path: fixtures/flight/playwright-report
           if-no-files-found: warn
       - name: Archive Flight fixture artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: flight-test-results
           path: fixtures/flight/test-results
@@ -689,10 +710,10 @@ jobs:
       matrix:
         browser: [chrome, firefox, edge]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -703,16 +724,14 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
@@ -724,11 +743,16 @@ jobs:
         run: ls -R build
       # Simplifies getting the extension for local testing
       - name: Archive ${{ matrix.browser }} extension
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: react-devtools-${{ matrix.browser }}-extension
           path: build/devtools/${{ matrix.browser }}-extension.zip
           if-no-files-found: error
+      - name: Archive ${{ matrix.browser }} metadata
+        uses: actions/upload-artifact@v6
+        with:
+          name: react-devtools-${{ matrix.browser }}-metadata
+          path: build/devtools/webpack-stats.*.json
 
   merge_devtools_artifacts:
     name: Merge DevTools artifacts
@@ -739,17 +763,17 @@ jobs:
         uses: actions/upload-artifact/merge@v4
         with:
           name: react-devtools
-          pattern: react-devtools-*-extension
+          pattern: react-devtools-*
 
   run_devtools_e2e_tests:
     name: Run DevTools e2e tests
     needs: [build_and_lint, runtime_node_modules_cache]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
@@ -760,26 +784,39 @@ jobs:
         with:
           path: |
             **/node_modules
-          key: runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            runtime-node_modules-v6-${{ runner.arch }}-${{ runner.os }}-
-            runtime-node_modules-v6-
+          key: runtime-node_modules-v7-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+          # Don't use restore-keys here. Otherwise the cache grows indefinitely.
       - name: Ensure clean build directory
         run: rm -rf build
       - run: yarn install --frozen-lockfile
         if: steps.node_modules.outputs.cache-hit != 'true'
       - name: Restore archived build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
           merge-multiple: true
-      - run: |
-          npx playwright install
-          sudo npx playwright install-deps
+      - name: Check Playwright version
+        id: playwright_version
+        run: echo "playwright_version=$(npm ls @playwright/test | grep @playwright | sed 's/.*@//' | head -1)" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright Browsers for version ${{ steps.playwright_version.outputs.playwright_version }}
+        id: cache_playwright_browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-v6-${{ runner.arch }}-${{ runner.os }}-${{ steps.playwright_version.outputs.playwright_version }}
+      - name: Playwright install deps
+        if: steps.cache_playwright_browsers.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
       - run: ./scripts/ci/run_devtools_e2e_tests.js
         env:
           RELEASE_CHANNEL: experimental
+      - name: Archive Playwright report
+        uses: actions/upload-artifact@v6
+        with:
+          name: devtools-playwright-artifacts
+          path: tmp/playwright-artifacts
+          if-no-files-found: warn
 
   # ----- SIZEBOT -----
   sizebot:
@@ -791,16 +828,16 @@ jobs:
       actions: read
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: yarn
           cache-dependency-path: yarn.lock
       - name: Restore cached node_modules
-        uses: actions/cache@v4 # note: this does not reuse centralized cache since it has unique cache key
+        uses: actions/cache@v5 # note: this does not reuse centralized cache since it has unique cache key
         id: node_modules
         with:
           path: |
@@ -831,7 +868,7 @@ jobs:
       - name: Ensure clean build directory
         run: rm -rf build
       - name: Restore archived build for PR
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: _build_*
           path: build
@@ -842,10 +879,10 @@ jobs:
           node ./scripts/print-warnings/print-warnings.js > build/__test_utils__/ReactAllWarnings.js
       - name: Display structure of build for PR
         run: ls -R build
-      - run: echo ${{ github.event.pull_request.head.sha || github.sha }} >> build/COMMIT_SHA
+      - run: echo ${{ github.event.inputs.commit_sha != '' && github.event.inputs.commit_sha || github.event.pull_request.head.sha || github.sha }} >> build/COMMIT_SHA
       - run: node ./scripts/tasks/danger
       - name: Archive sizebot results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sizebot-message
           path: sizebot-message.md
