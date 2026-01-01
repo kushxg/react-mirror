@@ -86,7 +86,14 @@ export function propagateScopeDependenciesHIR(fn: HIRFunction): void {
     const hoistables = hoistablePropertyLoads.get(scope.id);
     CompilerError.invariant(hoistables != null, {
       reason: '[PropagateScopeDependencies] Scope not found in tracked blocks',
-      loc: GeneratedSource,
+      description: null,
+      details: [
+        {
+          kind: 'error',
+          loc: GeneratedSource,
+          message: null,
+        },
+      ],
     });
     /**
      * Step 2: Calculate hoistable dependencies.
@@ -316,6 +323,7 @@ function collectTemporariesSidemapImpl(
         ) {
           temporaries.set(lvalue.identifier.id, {
             identifier: value.place.identifier,
+            reactive: value.place.reactive,
             path: [],
           });
         }
@@ -369,11 +377,13 @@ function getProperty(
   if (resolvedDependency == null) {
     property = {
       identifier: object.identifier,
+      reactive: object.reactive,
       path: [{property: propertyName, optional}],
     };
   } else {
     property = {
       identifier: resolvedDependency.identifier,
+      reactive: resolvedDependency.reactive,
       path: [...resolvedDependency.path, {property: propertyName, optional}],
     };
   }
@@ -425,7 +435,14 @@ export class DependencyCollectionContext {
     const scopedDependencies = this.#dependencies.value;
     CompilerError.invariant(scopedDependencies != null, {
       reason: '[PropagateScopeDeps]: Unexpected scope mismatch',
-      loc: scope.loc,
+      description: null,
+      details: [
+        {
+          kind: 'error',
+          loc: scope.loc,
+          message: null,
+        },
+      ],
     });
 
     // Restore context of previous scope
@@ -532,6 +549,7 @@ export class DependencyCollectionContext {
     this.visitDependency(
       this.#temporaries.get(place.identifier.id) ?? {
         identifier: place.identifier,
+        reactive: place.reactive,
         path: [],
       },
     );
@@ -596,6 +614,7 @@ export class DependencyCollectionContext {
     ) {
       maybeDependency = {
         identifier: maybeDependency.identifier,
+        reactive: maybeDependency.reactive,
         path: [],
       };
     }
@@ -617,7 +636,11 @@ export class DependencyCollectionContext {
         identifier =>
           identifier.declarationId === place.identifier.declarationId,
       ) &&
-      this.#checkValidDependency({identifier: place.identifier, path: []})
+      this.#checkValidDependency({
+        identifier: place.identifier,
+        reactive: place.reactive,
+        path: [],
+      })
     ) {
       currentScope.reassignments.add(place.identifier);
     }
