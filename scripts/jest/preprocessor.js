@@ -66,12 +66,12 @@ module.exports = {
     if (filePath.match(/\.json$/)) {
       return {code: src};
     }
-    if (!filePath.match(/\/third_party\//)) {
+    if (!filePath.match(/[/\\]third_party[/\\]/)) {
       // for test files, we also apply the async-await transform, but we want to
       // make sure we don't accidentally apply that transform to product code.
-      const isTestFile = !!filePath.match(/\/__tests__\//);
+      const isTestFile = !!filePath.match(/[/\\]__tests__[/\\]/);
       const isInDevToolsPackages = !!filePath.match(
-        /\/packages\/react-devtools.*\//
+        /[/\\]packages[/\\]react-devtools.*[/\\]/
       );
       const plugins = [].concat(babelOptions.plugins);
       if (isTestFile && isInDevToolsPackages) {
@@ -80,7 +80,19 @@ module.exports = {
 
       // This is only for React DevTools tests with React 16.x
       // `react/jsx-dev-runtime` and `react/jsx-runtime` are included in the package starting from v17
-      if (semver.gte(ReactVersionTestingAgainst, '17.0.0')) {
+      // Technically 16.14 and 15.7 have the new runtime but we're not testing those versions.
+      if (
+        semver.gte(ReactVersionTestingAgainst, '15.0.0') &&
+        semver.lt(ReactVersionTestingAgainst, '17.0.0')
+      ) {
+        plugins.push(
+          [
+            require.resolve('@babel/plugin-transform-react-jsx'),
+            {runtime: 'classic'},
+          ],
+          require.resolve('@babel/plugin-transform-react-jsx-source')
+        );
+      } else {
         plugins.push([
           process.env.NODE_ENV === 'development'
             ? require.resolve('@babel/plugin-transform-react-jsx-development')
@@ -89,11 +101,6 @@ module.exports = {
           // would be React.createElement.
           {runtime: 'automatic'},
         ]);
-      } else {
-        plugins.push(
-          require.resolve('@babel/plugin-transform-react-jsx'),
-          require.resolve('@babel/plugin-transform-react-jsx-source')
-        );
       }
 
       plugins.push(pathToTransformLazyJSXImport);
