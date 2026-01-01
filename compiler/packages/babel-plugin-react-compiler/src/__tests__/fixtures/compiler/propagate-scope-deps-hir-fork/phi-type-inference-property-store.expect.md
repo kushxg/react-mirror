@@ -34,7 +34,7 @@ import { c as _c } from "react/compiler-runtime"; // @debug @enablePropagateDeps
 function Component(props) {
   const $ = _c(4);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t0 = {};
     $[0] = t0;
   } else {
@@ -49,9 +49,7 @@ function Component(props) {
     } else {
       y = { a: props.a };
     }
-
     y.x = x;
-
     t1 = [x, y];
     $[1] = props.a;
     $[2] = props.cond;

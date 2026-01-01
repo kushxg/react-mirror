@@ -41,20 +41,17 @@ function Component(props) {
   const $ = _c(1);
   const [, setState] = useState();
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const a = () => b();
-
     const b = () => (
       <>
         <div onClick={() => onClick(true)}>a</div>
         <div onClick={() => onClick(false)}>b</div>
       </>
     );
-
     const onClick = (value) => {
       setState(value);
     };
-
     t0 = <div>{a()}</div>;
     $[0] = t0;
   } else {

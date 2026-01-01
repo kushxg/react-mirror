@@ -2,7 +2,7 @@
 ## Input
 
 ```javascript
-// @validateNoSetStateInRender:false
+// @validateNoSetStateInRender:false @enablePreserveExistingMemoizationGuarantees:false
 import {useMemo} from 'react';
 import {makeArray} from 'shared-runtime';
 
@@ -21,14 +21,14 @@ export const FIXTURE_ENTRYPOINT = {
 ## Code
 
 ```javascript
-import { c as _c } from "react/compiler-runtime"; // @validateNoSetStateInRender:false
+import { c as _c } from "react/compiler-runtime"; // @validateNoSetStateInRender:false @enablePreserveExistingMemoizationGuarantees:false
 import { useMemo } from "react";
 import { makeArray } from "shared-runtime";
 
 function Component() {
   const $ = _c(1);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t0 = makeArray();
     $[0] = t0;
   } else {

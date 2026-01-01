@@ -24,11 +24,10 @@ function foo() {}
 function Component(props) {
   const $ = _c(1);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const a = [];
     const b = {};
     foo(a, b);
-
     foo(b);
     t0 = <div a={a} b={b} />;
     $[0] = t0;

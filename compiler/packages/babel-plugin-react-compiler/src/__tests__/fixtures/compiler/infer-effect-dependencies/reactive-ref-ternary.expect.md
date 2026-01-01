@@ -3,7 +3,7 @@
 
 ```javascript
 // @inferEffectDependencies
-import {useRef, useEffect} from 'react';
+import {useRef, useEffect, AUTODEPS} from 'react';
 import {print, mutate} from 'shared-runtime';
 
 function Component({cond}) {
@@ -14,7 +14,7 @@ function Component({cond}) {
   useEffect(() => {
     mutate(derived.current);
     print(derived.current);
-  });
+  }, AUTODEPS);
   return arr;
 }
 
@@ -24,14 +24,14 @@ function Component({cond}) {
 
 ```javascript
 import { c as _c } from "react/compiler-runtime"; // @inferEffectDependencies
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, AUTODEPS } from "react";
 import { print, mutate } from "shared-runtime";
 
 function Component(t0) {
   const $ = _c(4);
   const { cond } = t0;
   let t1;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t1 = [];
     $[0] = t1;
   } else {
@@ -39,7 +39,7 @@ function Component(t0) {
   }
   const arr = useRef(t1);
   let t2;
-  if ($[1] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[1] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t2 = [];
     $[1] = t2;
   } else {

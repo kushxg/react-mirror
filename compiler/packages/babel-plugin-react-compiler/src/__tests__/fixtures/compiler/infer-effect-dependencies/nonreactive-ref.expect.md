@@ -3,7 +3,7 @@
 
 ```javascript
 // @inferEffectDependencies
-import {useEffect, useRef} from 'react';
+import {useEffect, useRef, AUTODEPS} from 'react';
 import {print} from 'shared-runtime';
 
 /**
@@ -14,7 +14,7 @@ import {print} from 'shared-runtime';
  */
 function NonReactiveRefInEffect() {
   const ref = useRef('initial value');
-  useEffect(() => print(ref.current));
+  useEffect(() => print(ref.current), AUTODEPS);
 }
 
 ```
@@ -23,7 +23,7 @@ function NonReactiveRefInEffect() {
 
 ```javascript
 import { c as _c } from "react/compiler-runtime"; // @inferEffectDependencies
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, AUTODEPS } from "react";
 import { print } from "shared-runtime";
 
 /**
@@ -36,7 +36,7 @@ function NonReactiveRefInEffect() {
   const $ = _c(1);
   const ref = useRef("initial value");
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t0 = () => print(ref.current);
     $[0] = t0;
   } else {

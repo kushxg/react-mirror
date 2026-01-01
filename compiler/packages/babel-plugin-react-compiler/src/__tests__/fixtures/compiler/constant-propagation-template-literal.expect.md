@@ -2,6 +2,7 @@
 ## Input
 
 ```javascript
+// @enablePreserveExistingMemoizationGuarantees:false
 import {Stringify, identity} from 'shared-runtime';
 
 function foo() {
@@ -64,7 +65,7 @@ export const FIXTURE_ENTRYPOINT = {
 ## Code
 
 ```javascript
-import { c as _c } from "react/compiler-runtime";
+import { c as _c } from "react/compiler-runtime"; // @enablePreserveExistingMemoizationGuarantees:false
 import { Stringify, identity } from "shared-runtime";
 
 function foo() {
@@ -73,13 +74,12 @@ function foo() {
     identity(`${Symbol("0")}`);
   } catch {}
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t0 = (
       <Stringify
         value={[
           true,
           true,
-
           "a\nb",
           "\n",
           "a1b",

@@ -63,13 +63,14 @@ const Foo = isForgetEnabled_Fixtures()
   ? function Foo(props) {
       "use forget";
       const $ = _c(3);
+
       if (props.bar < 0) {
         return props.children;
       }
 
       const t0 = props.bar - 1;
       let t1;
-      if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+      if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
         t1 = <NoForget />;
         $[0] = t1;
       } else {

@@ -23,6 +23,7 @@ function Component() {
 }
 
 function Child({ref}) {
+  'use no memo';
   // This violates the rules of React, so we access the ref in a child
   // component
   return ref.current;
@@ -47,7 +48,7 @@ function Component() {
   const [state, setState] = useState(false);
   let t0;
   let t1;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t0 = () => {
       ref.current = "Ok";
     };
@@ -61,7 +62,7 @@ function Component() {
   useEffect(t0, t1);
   let t2;
   let t3;
-  if ($[2] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[2] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t2 = () => {
       setState(true);
     };
@@ -86,8 +87,10 @@ function Component() {
   return t5;
 }
 
-function Child(t0) {
-  const { ref } = t0;
+function Child({ ref }) {
+  "use no memo";
+  // This violates the rules of React, so we access the ref in a child
+  // component
   return ref.current;
 }
 

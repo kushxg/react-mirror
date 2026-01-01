@@ -40,7 +40,7 @@ import { StaticText1, StaticText2 } from "shared-runtime";
 function MaybeMutable() {
   const $ = _c(1);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t0 = {};
     $[0] = t0;
   } else {
@@ -59,7 +59,6 @@ function Component(props) {
   if ($[0] !== props.alternateComponent || $[1] !== props.component) {
     const maybeMutable = new MaybeMutable();
     Tag = props.component;
-
     T0 = Tag;
     t0 = ((Tag = props.alternateComponent), maybeMutate(maybeMutable));
     $[0] = props.alternateComponent;

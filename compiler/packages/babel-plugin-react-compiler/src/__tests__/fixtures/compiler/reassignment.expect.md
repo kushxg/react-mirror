@@ -29,16 +29,14 @@ function Component(props) {
     x.push(props.p0);
     const y = x;
     let t1;
-    if ($[3] === Symbol.for("react.memo_cache_sentinel")) {
+    if ($[3] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
       t1 = [];
       $[3] = t1;
     } else {
       t1 = $[3];
     }
     x = t1;
-
     y.push(props.p1);
-
     t0 = <Component x={x} y={y} />;
     $[0] = props.p0;
     $[1] = props.p1;

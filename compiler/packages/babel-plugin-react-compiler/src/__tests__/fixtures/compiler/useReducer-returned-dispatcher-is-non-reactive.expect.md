@@ -32,11 +32,10 @@ function f() {
   const $ = _c(1);
   const [, dispatch] = useReducer();
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const onClick = () => {
       dispatch();
     };
-
     t0 = <div onClick={onClick} />;
     $[0] = t0;
   } else {

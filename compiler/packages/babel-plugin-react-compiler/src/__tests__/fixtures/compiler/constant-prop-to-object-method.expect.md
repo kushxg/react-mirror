@@ -30,13 +30,12 @@ import { identity } from "shared-runtime";
 function Foo() {
   const $ = _c(1);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const x = {
       foo() {
         return identity(1);
       },
     };
-
     t0 = x.foo();
     $[0] = t0;
   } else {

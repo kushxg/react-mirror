@@ -3,7 +3,7 @@
 
 ```javascript
 // @inferEffectDependencies
-import {useEffect, useRef} from 'react';
+import {useEffect, useRef, AUTODEPS} from 'react';
 import useEffectWrapper from 'useEffectWrapper';
 
 const moduleNonReactive = 0;
@@ -24,7 +24,7 @@ function Component({foo, bar}) {
     console.log(ref.current);
     console.log(localNonPrimitiveReactive);
     console.log(localNonPrimitiveNonreactive);
-  });
+  }, AUTODEPS);
 
   // Optional chains and property accesses
   // TODO: we may be able to save bytes by omitting property accesses if the
@@ -32,11 +32,11 @@ function Component({foo, bar}) {
   useEffect(() => {
     console.log(bar?.baz);
     console.log(bar.qux);
-  });
+  }, AUTODEPS);
 
   useEffectWrapper(() => {
     console.log(foo);
-  });
+  }, AUTODEPS);
 }
 
 ```
@@ -45,7 +45,7 @@ function Component({foo, bar}) {
 
 ```javascript
 import { c as _c } from "react/compiler-runtime"; // @inferEffectDependencies
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, AUTODEPS } from "react";
 import useEffectWrapper from "useEffectWrapper";
 
 const moduleNonReactive = 0;
@@ -65,7 +65,7 @@ function Component(t0) {
   }
   const localNonPrimitiveReactive = t1;
   let t2;
-  if ($[2] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[2] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t2 = {};
     $[2] = t2;
   } else {

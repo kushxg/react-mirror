@@ -69,23 +69,27 @@ function mutate(x, y) {
 function Component(props) {
   const $ = _c(1);
   let x;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const a = {};
     const b = [a];
     const c = {};
     const d = { c };
-
     x = {};
     x.b = b;
     const y = mutate(x, d);
+
     if (a) {
     }
+
     if (b) {
     }
+
     if (c) {
     }
+
     if (d) {
     }
+
     if (y) {
     }
 

@@ -97,11 +97,12 @@ const SomeName = () => {
   (FILLER ?? FILLER, FILLER) ?? FILLER;
 
   useSomeHook();
+
   if (anyConditionCanEvenBeFalse) {
     return null;
   }
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t0 = (
       <React.Fragment>
         {FILLER ? FILLER : FILLER}

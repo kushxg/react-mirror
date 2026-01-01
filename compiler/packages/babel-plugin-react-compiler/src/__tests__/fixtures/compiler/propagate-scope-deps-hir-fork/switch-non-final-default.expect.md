@@ -46,7 +46,7 @@ function Component(props) {
       case true: {
         x.push(props.p2);
         let t1;
-        if ($[4] === Symbol.for("react.memo_cache_sentinel")) {
+        if ($[4] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
           t1 = [];
           $[4] = t1;
         } else {
@@ -61,7 +61,6 @@ function Component(props) {
         y = x;
       }
     }
-
     t0 = <Component data={x} />;
     $[0] = props.p0;
     $[1] = props.p2;

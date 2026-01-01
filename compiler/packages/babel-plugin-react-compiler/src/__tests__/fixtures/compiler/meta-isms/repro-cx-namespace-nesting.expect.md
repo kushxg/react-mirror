@@ -2,6 +2,7 @@
 ## Input
 
 ```javascript
+// @compilationMode:"infer"
 import {makeArray} from 'shared-runtime';
 
 function Component() {
@@ -30,13 +31,13 @@ export const FIXTURE_ENTRYPOINT = {
 ## Code
 
 ```javascript
-import { c as _c } from "react/compiler-runtime";
+import { c as _c } from "react/compiler-runtime"; // @compilationMode:"infer"
 import { makeArray } from "shared-runtime";
 
 function Component() {
   const $ = _c(1);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const items = makeArray("foo", "bar", "", null, "baz", false, "merp");
     const classname = cx.namespace(...items.filter(isNonEmptyString));
     t0 = <div className={classname}>Ok</div>;

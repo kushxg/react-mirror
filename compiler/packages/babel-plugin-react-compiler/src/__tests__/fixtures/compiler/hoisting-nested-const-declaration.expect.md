@@ -33,16 +33,13 @@ import { c as _c } from "react/compiler-runtime";
 function hoisting() {
   const $ = _c(1);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const qux = () => {
       let result;
-
       result = foo();
       return result;
     };
-
     const foo = () => bar + baz;
-
     const bar = 3;
     const baz = 2;
     t0 = qux();

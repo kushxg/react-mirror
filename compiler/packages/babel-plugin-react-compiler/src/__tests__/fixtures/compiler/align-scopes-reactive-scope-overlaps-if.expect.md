@@ -39,21 +39,23 @@ function useFoo(t0) {
   const $ = _c(3);
   const { cond } = t0;
   let t1;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     t1 = {};
     $[0] = t1;
   } else {
     t1 = $[0];
   }
   let items = t1;
-  bb0: if ($[1] !== cond) {
-    if (cond) {
-      items = [];
-    } else {
-      break bb0;
-    }
+  if ($[1] !== cond) {
+    bb0: {
+      if (cond) {
+        items = [];
+      } else {
+        break bb0;
+      }
 
-    items.push(2);
+      items.push(2);
+    }
     $[1] = cond;
     $[2] = items;
   } else {

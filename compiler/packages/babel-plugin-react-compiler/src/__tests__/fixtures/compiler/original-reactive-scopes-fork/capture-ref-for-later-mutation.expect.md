@@ -40,17 +40,14 @@ function useKeyCommand() {
   const $ = _c(1);
   const currentPosition = useRef(0);
   let t0;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+  if ($[0] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
     const handleKey = (direction) => () => {
       const position = currentPosition.current;
       const nextPosition = direction === "left" ? addOne(position) : position;
       currentPosition.current = nextPosition;
     };
-
     const moveLeft = { handler: handleKey("left") };
-
     const moveRight = { handler: handleKey("right") };
-
     t0 = [moveLeft, moveRight];
     $[0] = t0;
   } else {

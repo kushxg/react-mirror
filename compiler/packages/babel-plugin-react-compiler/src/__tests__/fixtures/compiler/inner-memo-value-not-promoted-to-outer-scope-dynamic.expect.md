@@ -33,10 +33,9 @@ function Component(props) {
   let t1;
   if ($[0] !== item) {
     const count = new MaybeMutable(item);
-
     T1 = View;
     T0 = View;
-    if ($[5] === Symbol.for("react.memo_cache_sentinel")) {
+    if ($[5] === globalThis.Symbol.for("react.memo_cache_sentinel")) {
       t1 = <span>Text</span>;
       $[5] = t1;
     } else {
