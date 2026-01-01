@@ -14,6 +14,7 @@ import {
   Identifier,
   IdentifierId,
   Instruction,
+  InstructionKind,
   makePropertyLiteral,
   makeType,
   PropType,
@@ -24,12 +25,15 @@ import {
 } from '../HIR/HIR';
 import {
   BuiltInArrayId,
+  BuiltInEventHandlerId,
   BuiltInFunctionId,
   BuiltInJsxId,
   BuiltInMixedReadonlyId,
   BuiltInObjectId,
   BuiltInPropsId,
   BuiltInRefValueId,
+  BuiltInSetStateId,
+  BuiltInUseFragmentId,
   BuiltInUseRefId,
 } from '../HIR/ObjectShape';
 import {eachInstructionLValue, eachInstructionOperand} from '../HIR/visitors';
@@ -90,7 +94,8 @@ function apply(func: HIRFunction, unifier: Unifier): void {
       }
     }
   }
-  func.returnType = unifier.get(func.returnType);
+  const returns = func.returns.identifier;
+  returns.type = unifier.get(returns.type);
 }
 
 type TypeEquation = {
@@ -143,12 +148,12 @@ function* generate(
     }
   }
   if (returnTypes.length > 1) {
-    yield equation(func.returnType, {
+    yield equation(func.returns.identifier.type, {
       kind: 'Phi',
       operands: returnTypes,
     });
   } else if (returnTypes.length === 1) {
-    yield equation(func.returnType, returnTypes[0]!);
+    yield equation(func.returns.identifier.type, returnTypes[0]!);
   }
 }
 
@@ -193,10 +198,27 @@ function* generateInstructionTypes(
       break;
     }
 
-    // We intentionally do not infer types for context variables
+    // We intentionally do not infer types for most context variables
     case 'DeclareContext':
-    case 'StoreContext':
     case 'LoadContext': {
+      break;
+    }
+    case 'StoreContext': {
+      /**
+       * The caveat is StoreContext const, where we know the value is
+       * assigned once such that everywhere the value is accessed, it
+       * must have the same type from the rvalue.
+       *
+       * A concrete example where this is useful is `const ref = useRef()`
+       * where the ref is referenced before its declaration in a function
+       * expression, causing it to be converted to a const context variable.
+       */
+      if (value.lvalue.kind === InstructionKind.Const) {
+        yield equation(
+          value.lvalue.place.identifier.type,
+          value.value.identifier.type,
+        );
+      }
       break;
     }
 
@@ -244,7 +266,18 @@ function* generateInstructionTypes(
 
     case 'LoadGlobal': {
       const globalType = env.getGlobalDeclaration(value.binding, value.loc);
-      if (globalType) {
+      // If the binding is useFragment and the flag is enabled, override the type
+      if (
+        env.config.enableTreatUseFragmentAsRelay &&
+        value.binding.name === 'useFragment'
+      ) {
+        yield equation(left, {
+          kind: 'Function',
+          shapeId: BuiltInUseFragmentId,
+          return: {kind: 'Object', shapeId: BuiltInUseFragmentId},
+          isConstructor: false,
+        });
+      } else if (globalType) {
         yield equation(left, globalType);
       }
       break;
@@ -257,9 +290,16 @@ function* generateInstructionTypes(
        * We should change Hook to a subtype of Function or change unifier logic.
        * (see https://github.com/facebook/react-forget/pull/1427)
        */
+      let shapeId: string | null = null;
+      const calleeName = getName(names, value.callee.identifier.id);
+      if (env.config.enableTreatSetIdentifiersAsStateSetters) {
+        if (calleeName.startsWith('set')) {
+          shapeId = BuiltInSetStateId;
+        }
+      }
       yield equation(value.callee.identifier.type, {
         kind: 'Function',
-        shapeId: null,
+        shapeId,
         return: returnType,
         isConstructor: false,
       });
@@ -359,8 +399,14 @@ function* generateInstructionTypes(
                 value: makePropertyLiteral(propertyName),
               },
             });
+          } else if (item.kind === 'Spread') {
+            // Array pattern spread always creates an array
+            yield equation(item.place.identifier.type, {
+              kind: 'Object',
+              shapeId: BuiltInArrayId,
+            });
           } else {
-            break;
+            continue;
           }
         }
       } else {
@@ -407,7 +453,7 @@ function* generateInstructionTypes(
       yield equation(left, {
         kind: 'Function',
         shapeId: BuiltInFunctionId,
-        return: value.loweredFunc.func.returnType,
+        return: value.loweredFunc.func.returns.identifier.type,
         isConstructor: false,
       });
       break;
@@ -426,6 +472,53 @@ function* generateInstructionTypes(
 
     case 'JsxExpression':
     case 'JsxFragment': {
+      if (env.config.enableTreatRefLikeIdentifiersAsRefs) {
+        if (value.kind === 'JsxExpression') {
+          for (const prop of value.props) {
+            if (prop.kind === 'JsxAttribute' && prop.name === 'ref') {
+              yield equation(prop.place.identifier.type, {
+                kind: 'Object',
+                shapeId: BuiltInUseRefId,
+              });
+            }
+          }
+        }
+      }
+      if (env.config.enableInferEventHandlers) {
+        if (
+          value.kind === 'JsxExpression' &&
+          value.tag.kind === 'BuiltinTag' &&
+          !value.tag.name.includes('-')
+        ) {
+          /*
+           * Infer event handler types for built-in DOM elements.
+           * Props starting with "on" (e.g., onClick, onSubmit) on primitive tags
+           * are inferred as event handlers. This allows functions with ref access
+           * to be passed to these props, since DOM event handlers are guaranteed
+           * by React to only execute in response to events, never during render.
+           *
+           * We exclude tags with hyphens to avoid web components (custom elements),
+           * which are required by the HTML spec to contain a hyphen. Web components
+           * may call event handler props during their lifecycle methods (e.g.,
+           * connectedCallback), which would be unsafe for ref access.
+           */
+          for (const prop of value.props) {
+            if (
+              prop.kind === 'JsxAttribute' &&
+              prop.name.startsWith('on') &&
+              prop.name.length > 2 &&
+              prop.name[2] === prop.name[2].toUpperCase()
+            ) {
+              yield equation(prop.place.identifier.type, {
+                kind: 'Function',
+                shapeId: BuiltInEventHandlerId,
+                return: makeType(),
+                isConstructor: false,
+              });
+            }
+          }
+        }
+      }
       yield equation(left, {kind: 'Object', shapeId: BuiltInJsxId});
       break;
     }
@@ -441,7 +534,36 @@ function* generateInstructionTypes(
       yield equation(left, returnType);
       break;
     }
-    case 'PropertyStore':
+    case 'PropertyStore': {
+      /**
+       * Infer types based on assignments to known object properties
+       * This is important for refs, where assignment to `<maybeRef>.current`
+       * can help us infer that an object itself is a ref
+       */
+      yield equation(
+        /**
+         * Our property type declarations are best-effort and we haven't tested
+         * using them to drive inference of rvalues from lvalues. We want to emit
+         * a Property type in order to infer refs from `.current` accesses, but
+         * stay conservative by not otherwise inferring anything about rvalues.
+         * So we use a dummy type here.
+         *
+         * TODO: consider using the rvalue type here
+         */
+        makeType(),
+        // unify() only handles properties in the second position
+        {
+          kind: 'Property',
+          objectType: value.object.identifier.type,
+          objectName: getName(names, value.object.identifier.id),
+          propertyName: {
+            kind: 'literal',
+            value: value.property,
+          },
+        },
+      );
+      break;
+    }
     case 'DeclareLocal':
     case 'RegExpLiteral':
     case 'MetaProperty':
@@ -550,7 +672,13 @@ class Unifier {
       CompilerError.invariant(type.operands.length > 0, {
         reason: 'there should be at least one operand',
         description: null,
-        loc: null,
+        details: [
+          {
+            kind: 'error',
+            loc: null,
+            message: null,
+          },
+        ],
         suggestions: null,
       });
 
@@ -614,26 +742,32 @@ class Unifier {
          *   T2
          *   Phi [
          *     T3
-         *     Phi [
-         *       T4
-         *     ]
+         *     Phi [T4]
          *   ]
          * ]
          *
-         * Which avoids the cycle
+         * Which then resolves to T1, T2, T3, T4 as candidates (because
+         * they're all resolved Phi types).
          */
-        const operands = [];
+        const operands: Array<Type> = [];
         for (const operand of type.operands) {
-          if (operand.kind === 'Type' && operand.id === v.id) {
+          if (typeEquals(operand, v)) {
             continue;
           }
-          const resolved = this.tryResolveType(v, operand);
+          const resolved = this.tryResolveType(v, this.get(operand));
           if (resolved === null) {
             return null;
           }
           operands.push(resolved);
         }
-        return {kind: 'Phi', operands};
+        if (operands.length === 0) {
+          // All operands were `v`
+          return null;
+        }
+        return {
+          kind: 'Phi',
+          operands,
+        };
       }
       case 'Type': {
         const substitution = this.get(type);
@@ -711,6 +845,15 @@ class Unifier {
       return {kind: 'Phi', operands: type.operands.map(o => this.get(o))};
     }
 
+    if (type.kind === 'Function') {
+      return {
+        kind: 'Function',
+        isConstructor: type.isConstructor,
+        shapeId: type.shapeId,
+        return: this.get(type.return),
+      };
+    }
+
     return type;
   }
 }
@@ -734,12 +877,19 @@ function tryUnionTypes(ty1: Type, ty2: Type): Type | null {
   } else if (ty2.kind === 'Object' && ty2.shapeId === BuiltInMixedReadonlyId) {
     readonlyType = ty2;
     otherType = ty1;
+  } else if (ty1.kind === 'Object' && ty1.shapeId === BuiltInUseFragmentId) {
+    readonlyType = ty1;
+    otherType = ty2;
+  } else if (ty2.kind === 'Object' && ty2.shapeId === BuiltInUseFragmentId) {
+    readonlyType = ty2;
+    otherType = ty1;
   } else {
     return null;
   }
   if (otherType.kind === 'Primitive') {
     /**
      * Union(Primitive | MixedReadonly) = MixedReadonly
+     * Union(Primitive | UseFragment) = UseFragment
      *
      * For example, `data ?? null` could return `data`, the fact that RHS
      * is a primitive doesn't guarantee the result is a primitive.
@@ -751,6 +901,7 @@ function tryUnionTypes(ty1: Type, ty2: Type): Type | null {
   ) {
     /**
      * Union(Array | MixedReadonly) = Array
+     * Union(Array | UseFragment) = Array
      *
      * In practice this pattern means the result is always an array. Given
      * that this behavior requires opting-in to the mixedreadonly type

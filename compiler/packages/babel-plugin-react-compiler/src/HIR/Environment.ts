@@ -6,10 +6,10 @@
  */
 
 import * as t from '@babel/types';
-import {ZodError, z} from 'zod';
-import {fromZodError} from 'zod-validation-error';
+import {ZodError, z} from 'zod/v4';
+import {fromZodError} from 'zod-validation-error/v4';
 import {CompilerError} from '../CompilerError';
-import {Logger, ProgramContext} from '../Entrypoint';
+import {CompilerOutputMode, Logger, ProgramContext} from '../Entrypoint';
 import {Err, Ok, Result} from '../Utils/Result';
 import {
   DEFAULT_GLOBALS,
@@ -41,14 +41,18 @@ import {
 } from './HIR';
 import {
   BuiltInMixedReadonlyId,
+  BuiltInUseFragmentId,
   DefaultMutatingHook,
   DefaultNonmutatingHook,
   FunctionSignature,
   ShapeRegistry,
   addHook,
 } from './ObjectShape';
-import {Scope as BabelScope} from '@babel/traverse';
+import {Scope as BabelScope, NodePath} from '@babel/traverse';
 import {TypeSchema} from './TypeSchema';
+import {FlowTypeEnv} from '../Flood/Types';
+import {defaultModuleTypeProvider} from './DefaultModuleTypeProvider';
+import {assertExhaustive} from '../Utils/utils';
 
 export const ReactElementSymbolSchema = z.object({
   elementSymbol: z.union([
@@ -81,21 +85,11 @@ export type ExternalFunction = z.infer<typeof ExternalFunctionSchema>;
 export const USE_FIRE_FUNCTION_NAME = 'useFire';
 export const EMIT_FREEZE_GLOBAL_GATING = '__DEV__';
 
-export const MacroMethodSchema = z.union([
-  z.object({type: z.literal('wildcard')}),
-  z.object({type: z.literal('name'), name: z.string()}),
-]);
-
-// Would like to change this to drop the string option, but breaks compatibility with existing configs
-export const MacroSchema = z.union([
-  z.string(),
-  z.tuple([z.string(), z.array(MacroMethodSchema)]),
-]);
+export const MacroSchema = z.string();
 
 export type CompilerMode = 'all_features' | 'no_inferred_memo';
 
 export type Macro = z.infer<typeof MacroSchema>;
-export type MacroMethod = z.infer<typeof MacroMethodSchema>;
 
 const HookSchema = z.object({
   /*
@@ -157,7 +151,7 @@ export const EnvironmentConfigSchema = z.object({
    * A function that, given the name of a module, can optionally return a description
    * of that module's type signature.
    */
-  moduleTypeProvider: z.nullable(z.function().args(z.string())).default(null),
+  moduleTypeProvider: z.nullable(z.any()).default(null),
 
   /**
    * A list of functions which the application compiles as macros, where
@@ -208,7 +202,7 @@ export const EnvironmentConfigSchema = z.object({
    * that if a useEffect or useCallback references a function value, that function value will be
    * considered frozen, and in turn all of its referenced variables will be considered frozen as well.
    */
-  enablePreserveExistingMemoizationGuarantees: z.boolean().default(false),
+  enablePreserveExistingMemoizationGuarantees: z.boolean().default(true),
 
   /**
    * Validates that all useMemo/useCallback values are also memoized by Forget. This mode can be
@@ -224,6 +218,16 @@ export const EnvironmentConfigSchema = z.object({
    * may change under Forget.
    */
   validatePreserveExistingMemoizationGuarantees: z.boolean().default(true),
+
+  /**
+   * Validate that dependencies supplied to manual memoization calls are exhaustive.
+   */
+  validateExhaustiveMemoizationDependencies: z.boolean().default(true),
+
+  /**
+   * Validate that dependencies supplied to effect hooks are exhaustive.
+   */
+  validateExhaustiveEffectDependencies: z.boolean().default(false),
 
   /**
    * When this is true, rather than pruning existing manual memoization but ensuring or validating
@@ -244,6 +248,12 @@ export const EnvironmentConfigSchema = z.object({
   enableUseTypeAnnotations: z.boolean().default(false),
 
   /**
+   * Allows specifying a function that can populate HIR with type information from
+   * Flow
+   */
+  flowTypeProvider: z.nullable(z.any()).default(null),
+
+  /**
    * Enables inference of optional dependency chains. Without this flag
    * a property chain such as `props?.items?.foo` will infer as a dep on
    * just `props`. With this flag enabled, we'll infer that full path as
@@ -253,6 +263,8 @@ export const EnvironmentConfigSchema = z.object({
 
   enableFire: z.boolean().default(false),
 
+  enableNameAnonymousFunctions: z.boolean().default(false),
+
   /**
    * Enables inference and auto-insertion of effect dependencies. Takes in an array of
    * configurable module and import pairs to allow for user-land experimentation. For example,
@@ -260,21 +272,19 @@ export const EnvironmentConfigSchema = z.object({
    *   {
    *     module: 'react',
    *     imported: 'useEffect',
-   *     numRequiredArgs: 1,
+   *     autodepsIndex: 1,
    *   },{
    *     module: 'MyExperimentalEffectHooks',
    *     imported: 'useExperimentalEffect',
-   *     numRequiredArgs: 2,
+   *     autodepsIndex: 2,
    *   },
    * ]
    * would insert dependencies for calls of `useEffect` imported from `react` and calls of
    * useExperimentalEffect` from `MyExperimentalEffectHooks`.
    *
-   * `numRequiredArgs` tells the compiler the amount of arguments required to append a dependency
-   *  array to the end of the call. With the configuration above, we'd insert dependencies for
-   *  `useEffect` if it is only given a single argument and it would be appended to the argument list.
-   *
-   * numRequiredArgs must always be greater than 0, otherwise there is no function to analyze for dependencies
+   * `autodepsIndex` tells the compiler which index we expect the AUTODEPS to appear in.
+   *  With the configuration above, we'd insert dependencies for `useEffect` if it has two
+   *  arguments, and the second is AUTODEPS.
    *
    * Still experimental.
    */
@@ -283,7 +293,7 @@ export const EnvironmentConfigSchema = z.object({
       z.array(
         z.object({
           function: ExternalFunctionSchema,
-          numRequiredArgs: z.number().min(1, 'numRequiredArgs must be > 0'),
+          autodepsIndex: z.number().min(1, 'autodepsIndex must be > 0'),
         }),
       ),
     )
@@ -315,10 +325,28 @@ export const EnvironmentConfigSchema = z.object({
   validateNoSetStateInRender: z.boolean().default(true),
 
   /**
-   * Validates that setState is not called directly within a passive effect (useEffect).
+   * When enabled, changes the behavior of validateNoSetStateInRender to recommend
+   * using useKeyedState instead of the manual pattern for resetting state.
+   */
+  enableUseKeyedState: z.boolean().default(false),
+
+  /**
+   * Validates that setState is not called synchronously within an effect (useEffect and friends).
    * Scheduling a setState (with an event listener, subscription, etc) is valid.
    */
-  validateNoSetStateInPassiveEffects: z.boolean().default(false),
+  validateNoSetStateInEffects: z.boolean().default(false),
+
+  /**
+   * Validates that effects are not used to calculate derived data which could instead be computed
+   * during render.
+   */
+  validateNoDerivedComputationsInEffects: z.boolean().default(false),
+
+  /**
+   * Experimental: Validates that effects are not used to calculate derived data which could instead be computed
+   * during render. Generates a custom error message for each type of violation.
+   */
+  validateNoDerivedComputationsInEffects_exp: z.boolean().default(false),
 
   /**
    * Validates against creating JSX within a try block and recommends using an error boundary
@@ -353,6 +381,13 @@ export const EnvironmentConfigSchema = z.object({
    */
   validateNoCapitalizedCalls: z.nullable(z.array(z.string())).default(null),
   validateBlocklistedImports: z.nullable(z.array(z.string())).default(null),
+
+  /**
+   * Validates that AST nodes generated during codegen have proper source locations.
+   * This is useful for debugging issues with source maps and Istanbul coverage.
+   * When enabled, the compiler will error if important source locations are missing in the generated AST.
+   */
+  validateSourceLocations: z.boolean().default(false),
 
   /**
    * Validate against impure functions called during render
@@ -605,7 +640,20 @@ export const EnvironmentConfigSchema = z.object({
    *
    * Here the variables `ref` and `myRef` will be typed as Refs.
    */
-  enableTreatRefLikeIdentifiersAsRefs: z.boolean().default(false),
+  enableTreatRefLikeIdentifiersAsRefs: z.boolean().default(true),
+
+  /**
+   * Treat identifiers as SetState type if both
+   * - they are named with a "set-" prefix
+   * - they are called somewhere
+   */
+  enableTreatSetIdentifiersAsStateSetters: z.boolean().default(false),
+
+  /**
+   * Treat hook calls named "useFragment" as returning BuiltInUseFragment type.
+   * This enables tracking of Relay fragment-derived values through the program.
+   */
+  enableTreatUseFragmentAsRelay: z.boolean().default(false),
 
   /*
    * If specified a value, the compiler lowers any calls to `useContext` to use
@@ -628,6 +676,55 @@ export const EnvironmentConfigSchema = z.object({
    * ```
    */
   lowerContextAccess: ExternalFunctionSchema.nullable().default(null),
+
+  /**
+   * If enabled, will validate useMemos that don't return any values:
+   *
+   * Valid:
+   *   useMemo(() => foo, [foo]);
+   *   useMemo(() => { return foo }, [foo]);
+   * Invalid:
+   *   useMemo(() => { ... }, [...]);
+   */
+  validateNoVoidUseMemo: z.boolean().default(true),
+
+  /**
+   * Validates that Components/Hooks are always defined at module level. This prevents scope
+   * reference errors that occur when the compiler attempts to optimize the nested component/hook
+   * while its parent function remains uncompiled.
+   */
+  validateNoDynamicallyCreatedComponentsOrHooks: z.boolean().default(false),
+
+  /**
+   * When enabled, allows setState calls in effects based on valid patterns involving refs:
+   * - Allow setState where the value being set is derived from a ref. This is useful where
+   *   state needs to take into account layer information, and a layout effect reads layout
+   *   data from a ref and sets state.
+   * - Allow conditionally calling setState after manually comparing previous/new values
+   *   for changes via a ref. Relying on effect deps is insufficient for non-primitive values,
+   *   so a ref is generally required to manually track previous values and compare prev/next
+   *   for meaningful changes before setting state.
+   */
+  enableAllowSetStateFromRefsInEffects: z.boolean().default(true),
+
+  /**
+   * When enabled, provides verbose error messages for setState calls within effects,
+   * presenting multiple possible fixes to the user/agent since we cannot statically
+   * determine which specific use-case applies:
+   * 1. Non-local derived data - requires restructuring state ownership
+   * 2. Derived event pattern - detecting when a prop changes
+   * 3. Force update / external sync - should use useSyncExternalStore
+   */
+  enableVerboseNoSetStateInEffect: z.boolean().default(false),
+
+  /**
+   * Enables inference of event handler types for JSX props on built-in DOM elements.
+   * When enabled, functions passed to event handler props (props starting with "on")
+   * on primitive JSX tags are inferred to have the BuiltinEventHandlerId type, which
+   * allows ref access within those functions since DOM event handlers are guaranteed
+   * by React to only execute in response to events, not during render.
+   */
+  enableInferEventHandlers: z.boolean().default(false),
 });
 
 export type EnvironmentConfig = z.infer<typeof EnvironmentConfigSchema>;
@@ -667,7 +764,7 @@ export class Environment {
   code: string | null;
   config: EnvironmentConfig;
   fnType: ReactFunctionType;
-  compilerMode: CompilerMode;
+  outputMode: CompilerOutputMode;
   programContext: ProgramContext;
   hasFireRewrite: boolean;
   hasInferredEffect: boolean;
@@ -675,13 +772,17 @@ export class Environment {
 
   #contextIdentifiers: Set<t.Identifier>;
   #hoistedIdentifiers: Set<t.Identifier>;
+  parentFunction: NodePath<t.Function>;
+
+  #flowTypeEnvironment: FlowTypeEnv | null;
 
   constructor(
     scope: BabelScope,
     fnType: ReactFunctionType,
-    compilerMode: CompilerMode,
+    outputMode: CompilerOutputMode,
     config: EnvironmentConfig,
     contextIdentifiers: Set<t.Identifier>,
+    parentFunction: NodePath<t.Function>, // the outermost function being compiled
     logger: Logger | null,
     filename: string | null,
     code: string | null,
@@ -689,7 +790,7 @@ export class Environment {
   ) {
     this.#scope = scope;
     this.fnType = fnType;
-    this.compilerMode = compilerMode;
+    this.outputMode = outputMode;
     this.config = config;
     this.filename = filename;
     this.code = code;
@@ -716,17 +817,31 @@ export class Environment {
       CompilerError.invariant(!this.#globals.has(hookName), {
         reason: `[Globals] Found existing definition in global registry for custom hook ${hookName}`,
         description: null,
-        loc: null,
+        details: [
+          {
+            kind: 'error',
+            loc: null,
+            message: null,
+          },
+        ],
         suggestions: null,
       });
+      // Use BuiltInUseFragmentId for useFragment to enable tracking of fragment-derived values
+      const returnTypeShapeId =
+        hookName === 'useFragment'
+          ? BuiltInUseFragmentId
+          : hook.transitiveMixedData
+            ? BuiltInMixedReadonlyId
+            : null;
       this.#globals.set(
         hookName,
         addHook(this.#shapes, {
           positionalParams: [],
           restParam: hook.effectKind,
-          returnType: hook.transitiveMixedData
-            ? {kind: 'Object', shapeId: BuiltInMixedReadonlyId}
-            : {kind: 'Poly'},
+          returnType:
+            returnTypeShapeId != null
+              ? {kind: 'Object', shapeId: returnTypeShapeId}
+              : {kind: 'Poly'},
           returnValueKind: hook.valueKind,
           calleeEffect: Effect.Read,
           hookKind: 'Custom',
@@ -740,12 +855,104 @@ export class Environment {
       this.#moduleTypes.set(REANIMATED_MODULE_NAME, reanimatedModuleType);
     }
 
+    this.parentFunction = parentFunction;
     this.#contextIdentifiers = contextIdentifiers;
     this.#hoistedIdentifiers = new Set();
+
+    if (config.flowTypeProvider != null) {
+      this.#flowTypeEnvironment = new FlowTypeEnv();
+      CompilerError.invariant(code != null, {
+        reason:
+          'Expected Environment to be initialized with source code when a Flow type provider is specified',
+        description: null,
+        details: [
+          {
+            kind: 'error',
+            loc: null,
+            message: null,
+          },
+        ],
+      });
+      this.#flowTypeEnvironment.init(this, code);
+    } else {
+      this.#flowTypeEnvironment = null;
+    }
   }
 
-  get isInferredMemoEnabled(): boolean {
-    return this.compilerMode !== 'no_inferred_memo';
+  get typeContext(): FlowTypeEnv {
+    CompilerError.invariant(this.#flowTypeEnvironment != null, {
+      reason: 'Flow type environment not initialized',
+      description: null,
+      details: [
+        {
+          kind: 'error',
+          loc: null,
+          message: null,
+        },
+      ],
+    });
+    return this.#flowTypeEnvironment;
+  }
+
+  get enableDropManualMemoization(): boolean {
+    switch (this.outputMode) {
+      case 'lint': {
+        // linting drops to be more compatible with compiler analysis
+        return true;
+      }
+      case 'client':
+      case 'ssr': {
+        return true;
+      }
+      case 'client-no-memo': {
+        return false;
+      }
+      default: {
+        assertExhaustive(
+          this.outputMode,
+          `Unexpected output mode '${this.outputMode}'`,
+        );
+      }
+    }
+  }
+
+  get enableMemoization(): boolean {
+    switch (this.outputMode) {
+      case 'client':
+      case 'lint': {
+        // linting also enables memoization so that we can check if manual memoization is preserved
+        return true;
+      }
+      case 'ssr':
+      case 'client-no-memo': {
+        return false;
+      }
+      default: {
+        assertExhaustive(
+          this.outputMode,
+          `Unexpected output mode '${this.outputMode}'`,
+        );
+      }
+    }
+  }
+
+  get enableValidations(): boolean {
+    switch (this.outputMode) {
+      case 'client':
+      case 'lint':
+      case 'ssr': {
+        return true;
+      }
+      case 'client-no-memo': {
+        return false;
+      }
+      default: {
+        assertExhaustive(
+          this.outputMode,
+          `Unexpected output mode '${this.outputMode}'`,
+        );
+      }
+    }
   }
 
   get nextIdentifierId(): IdentifierId {
@@ -806,10 +1013,22 @@ export class Environment {
   #resolveModuleType(moduleName: string, loc: SourceLocation): Global | null {
     let moduleType = this.#moduleTypes.get(moduleName);
     if (moduleType === undefined) {
-      if (this.config.moduleTypeProvider == null) {
+      /*
+       * NOTE: Zod doesn't work when specifying a function as a default, so we have to
+       * fallback to the default value here
+       */
+      const moduleTypeProvider =
+        this.config.moduleTypeProvider ?? defaultModuleTypeProvider;
+      if (moduleTypeProvider == null) {
         return null;
       }
-      const unparsedModuleConfig = this.config.moduleTypeProvider(moduleName);
+      if (typeof moduleTypeProvider !== 'function') {
+        CompilerError.throwInvalidConfig({
+          reason: `Expected a function for \`moduleTypeProvider\``,
+          loc,
+        });
+      }
+      const unparsedModuleConfig = moduleTypeProvider(moduleName);
       if (unparsedModuleConfig != null) {
         const parsedModuleConfig = TypeSchema.safeParse(unparsedModuleConfig);
         if (!parsedModuleConfig.success) {
@@ -983,7 +1202,13 @@ export class Environment {
       CompilerError.invariant(shape !== undefined, {
         reason: `[HIR] Forget internal error: cannot resolve shape ${shapeId}`,
         description: null,
-        loc: null,
+        details: [
+          {
+            kind: 'error',
+            loc: null,
+            message: null,
+          },
+        ],
         suggestions: null,
       });
       return shape.properties.get('*') ?? null;
@@ -1008,7 +1233,13 @@ export class Environment {
       CompilerError.invariant(shape !== undefined, {
         reason: `[HIR] Forget internal error: cannot resolve shape ${shapeId}`,
         description: null,
-        loc: null,
+        details: [
+          {
+            kind: 'error',
+            loc: null,
+            message: null,
+          },
+        ],
         suggestions: null,
       });
       if (typeof property === 'string') {
@@ -1033,7 +1264,13 @@ export class Environment {
       CompilerError.invariant(shape !== undefined, {
         reason: `[HIR] Forget internal error: cannot resolve shape ${shapeId}`,
         description: null,
-        loc: null,
+        details: [
+          {
+            kind: 'error',
+            loc: null,
+            message: null,
+          },
+        ],
         suggestions: null,
       });
       return shape.functionType;
