@@ -1,22 +1,28 @@
 import React, {
-  unstable_addTransitionType as addTransitionType,
-  unstable_ViewTransition as ViewTransition,
-  unstable_Activity as Activity,
+  addTransitionType,
+  ViewTransition,
+  Activity,
   useLayoutEffect,
   useEffect,
   useState,
   useId,
   useOptimistic,
   startTransition,
+  Suspense,
 } from 'react';
 
 import {createPortal} from 'react-dom';
 
-import SwipeRecognizer from './SwipeRecognizer';
+import SwipeRecognizer from './SwipeRecognizer.js';
 
 import './Page.css';
 
 import transitions from './Transitions.module.css';
+import NestedReveal from './NestedReveal.js';
+
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 const a = (
   <div key="a">
@@ -44,7 +50,8 @@ function Component() {
       <p>
         <img
           src="https://react.dev/_next/image?url=%2Fimages%2Fteam%2Fsebmarkbage.jpg&w=3840&q=75"
-          width="300"
+          width="400"
+          height="248"
         />
       </p>
     </ViewTransition>
@@ -54,6 +61,12 @@ function Component() {
 function Id() {
   // This is just testing that Id inside a ViewTransition can hydrate correctly.
   return <span id={useId()} />;
+}
+
+let wait;
+function Suspend() {
+  if (!wait) wait = sleep(500);
+  return React.use(wait);
 }
 
 export default function Page({url, navigate}) {
@@ -89,7 +102,7 @@ export default function Page({url, navigate}) {
     // a flushSync will.
     // Promise.resolve().then(() => {
     //   flushSync(() => {
-    setCounter(c => c + 10);
+    // setCounter(c => c + 10);
     //  });
     // });
   }, [show]);
@@ -106,7 +119,13 @@ export default function Page({url, navigate}) {
       document.body
     )
   ) : (
-    <button onClick={() => startTransition(() => setShowModal(true))}>
+    <button
+      onClick={() =>
+        startTransition(async () => {
+          await sleep(2000);
+          setShowModal(true);
+        })
+      }>
       Show Modal
     </button>
   );
@@ -183,22 +202,48 @@ export default function Page({url, navigate}) {
                 <div>!!</div>
               </ViewTransition>
             </Activity>
-            <p>these</p>
-            <p>rows</p>
-            <p>exist</p>
-            <p>to</p>
-            <p>test</p>
-            <p>scrolling</p>
-            <p>content</p>
-            <p>out</p>
-            <p>of</p>
-            {portal}
-            <p>the</p>
-            <p>viewport</p>
-            {show ? <Component /> : null}
+            <Suspense
+              fallback={
+                <ViewTransition>
+                  <div>
+                    <ViewTransition name="shared-reveal">
+                      <h2>█████</h2>
+                    </ViewTransition>
+                    <p>████</p>
+                    <p>███████</p>
+                    <p>████</p>
+                    <p>██</p>
+                    <p>██████</p>
+                    <p>███</p>
+                    <p>████</p>
+                  </div>
+                </ViewTransition>
+              }>
+              <ViewTransition>
+                <div>
+                  <p>these</p>
+                  <p>rows</p>
+                  <ViewTransition name="shared-reveal">
+                    <h2>exist</h2>
+                  </ViewTransition>
+                  <p>to</p>
+                  <p>test</p>
+                  <p>scrolling</p>
+                  <p>content</p>
+                  <p>out</p>
+                  <p>of</p>
+                  {portal}
+                  <p>the</p>
+                  <p>viewport</p>
+                  <Suspend />
+                </div>
+              </ViewTransition>
+              {show ? <Component /> : null}
+            </Suspense>
           </div>
         </ViewTransition>
       </SwipeRecognizer>
+      <NestedReveal />
     </div>
   );
 }

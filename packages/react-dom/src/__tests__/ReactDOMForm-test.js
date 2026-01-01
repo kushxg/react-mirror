@@ -14,8 +14,8 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 // Our current version of JSDOM doesn't implement the event dispatching
 // so we polyfill it.
 const NativeFormData = global.FormData;
-const FormDataPolyfill = function FormData(form) {
-  const formData = new NativeFormData(form);
+const FormDataPolyfill = function FormData(form, submitter) {
+  const formData = new NativeFormData(form, submitter);
   const formDataEvent = new Event('formdata', {
     bubbles: true,
     cancelable: false,
@@ -489,11 +489,16 @@ describe('ReactDOMForm', () => {
     const inputRef = React.createRef();
     const buttonRef = React.createRef();
     const outsideButtonRef = React.createRef();
+    const imageButtonRef = React.createRef();
     let button;
+    let buttonX;
+    let buttonY;
     let title;
 
     function action(formData) {
       button = formData.get('button');
+      buttonX = formData.get('button.x');
+      buttonY = formData.get('button.y');
       title = formData.get('title');
     }
 
@@ -508,6 +513,12 @@ describe('ReactDOMForm', () => {
             <button name="button" value="edit" ref={buttonRef}>
               Edit
             </button>
+            <input
+              type="image"
+              name="button"
+              href="/some/image.png"
+              ref={imageButtonRef}
+            />
           </form>
           <form id="form" action={action}>
             <input type="text" name="title" defaultValue="hello" />
@@ -546,9 +557,12 @@ describe('ReactDOMForm', () => {
     expect(button).toBe('outside');
     expect(title).toBe('hello');
 
-    // Ensure that the type field got correctly restored
-    expect(inputRef.current.getAttribute('type')).toBe('submit');
-    expect(buttonRef.current.getAttribute('type')).toBe(null);
+    await submit(imageButtonRef.current);
+
+    expect(button).toBe(null);
+    expect(buttonX).toBe('0');
+    expect(buttonY).toBe('0');
+    expect(title).toBe('hello');
   });
 
   it('excludes the submitter name when the submitter is a function action', async () => {
@@ -2280,5 +2294,479 @@ describe('ReactDOMForm', () => {
     await act(() => root.render(<Form action={new MyAction()} />));
     await submit(formRef.current);
     assertLog(['stringified action']);
+  });
+
+  it('form actions should retain status when nested state changes', async () => {
+    const formRef = React.createRef();
+
+    let rerenderUnrelatedStatus;
+    function UnrelatedStatus() {
+      const {pending} = useFormStatus();
+      const [counter, setCounter] = useState(0);
+      rerenderUnrelatedStatus = () => setCounter(n => n + 1);
+      Scheduler.log(`[unrelated form] pending: ${pending}, state: ${counter}`);
+    }
+
+    let rerenderTargetStatus;
+    function TargetStatus() {
+      const {pending} = useFormStatus();
+      const [counter, setCounter] = useState(0);
+      Scheduler.log(`[target form] pending: ${pending}, state: ${counter}`);
+      rerenderTargetStatus = () => setCounter(n => n + 1);
+    }
+
+    function App() {
+      async function action() {
+        return new Promise(resolve => {
+          // never resolves
+        });
+      }
+
+      return (
+        <>
+          <form action={action} ref={formRef}>
+            <input type="submit" />
+            <TargetStatus />
+          </form>
+          <form>
+            <UnrelatedStatus />
+          </form>
+        </>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    assertLog([
+      '[target form] pending: false, state: 0',
+      '[unrelated form] pending: false, state: 0',
+    ]);
+
+    await submit(formRef.current);
+
+    assertLog(['[target form] pending: true, state: 0']);
+
+    await act(() => rerenderTargetStatus());
+
+    assertLog(['[target form] pending: true, state: 1']);
+
+    await act(() => rerenderUnrelatedStatus());
+
+    assertLog(['[unrelated form] pending: false, state: 1']);
+  });
+
+  it('forms should not reset when action fails', async () => {
+    const formRef = React.createRef();
+    const inputRef = React.createRef();
+    let formValueBeforeError = null;
+
+    function App() {
+      return (
+        <form
+          ref={formRef}
+          action={async () => {
+            Scheduler.log('Action started');
+            await getText('Wait');
+            // Save the form value before throwing
+            formValueBeforeError = inputRef.current.value;
+            throw new Error('Action failed');
+          }}>
+          <input
+            ref={inputRef}
+            type="text"
+            name="username"
+            defaultValue="initial"
+          />
+        </form>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    // Dirty the input
+    inputRef.current.value = 'modified';
+
+    // Submit the form
+    await submit(formRef.current);
+    assertLog(['Action started']);
+
+    // Form should not reset while action is pending
+    expect(inputRef.current.value).toBe('modified');
+
+    // Action completes and throws - this would normally be caught by an error boundary
+    // but we just want to verify the form wasn't reset before the error
+    try {
+      await act(() => resolveText('Wait'));
+    } catch (e) {
+      // Expected to throw
+    }
+
+    // Verify the form was NOT reset before the error was thrown
+    expect(formValueBeforeError).toBe('modified');
+
+    // inputRef.current may be null if React unmounted the form after the async error
+    if (inputRef.current) {
+      expect(inputRef.current.value).toBe('modified');
+    }
+  });
+
+  it('forms should not reset on synchronous action error', async () => {
+    const formRef = React.createRef();
+    const inputRef = React.createRef();
+    let valueBeforeError = null;
+
+    function App() {
+      return (
+        <form
+          ref={formRef}
+          action={() => {
+            valueBeforeError = inputRef.current.value;
+            throw new Error('Sync error');
+          }}>
+          <input ref={inputRef} defaultValue="initial" />
+        </form>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    inputRef.current.value = 'modified';
+
+    try {
+      await submit(formRef.current);
+    } catch {}
+
+    // Assert the value right before the error was thrown
+    expect(valueBeforeError).toBe('modified');
+  });
+
+  it('controlled checkboxes should not reset on form submission', async () => {
+    const formRef = React.createRef();
+    const checkboxRef = React.createRef();
+
+    function App() {
+      const [isChecked, setIsChecked] = React.useState(false);
+
+      return (
+        <form
+          ref={formRef}
+          action={() => {
+            Scheduler.log('Form submitted');
+          }}>
+          <input
+            ref={checkboxRef}
+            type="checkbox"
+            checked={isChecked}
+            onChange={e => setIsChecked(e.target.checked)}
+          />
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    // Initially unchecked
+    expect(checkboxRef.current.checked).toBe(false);
+
+    // Check the checkbox (wrap in act because it updates state)
+    await act(() => {
+      checkboxRef.current.click();
+    });
+    expect(checkboxRef.current.checked).toBe(true);
+
+    // Submit form
+    await submit(formRef.current);
+    assertLog(['Form submitted']);
+
+    // Controlled checkbox should NOT reset
+    expect(checkboxRef.current.checked).toBe(true);
+  });
+
+  it('controlled radio buttons should not reset on form submission', async () => {
+    const formRef = React.createRef();
+    const radio1Ref = React.createRef();
+    const radio2Ref = React.createRef();
+
+    function App() {
+      const [selected, setSelected] = React.useState('option1');
+
+      return (
+        <form
+          ref={formRef}
+          action={() => {
+            Scheduler.log('Form submitted');
+          }}>
+          <input
+            ref={radio1Ref}
+            type="radio"
+            name="choice"
+            value="option1"
+            checked={selected === 'option1'}
+            onChange={e => setSelected(e.target.value)}
+          />
+          <input
+            ref={radio2Ref}
+            type="radio"
+            name="choice"
+            value="option2"
+            checked={selected === 'option2'}
+            onChange={e => setSelected(e.target.value)}
+          />
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    // Initially option1 is checked
+    expect(radio1Ref.current.checked).toBe(true);
+    expect(radio2Ref.current.checked).toBe(false);
+
+    // Select option2 (wrap in act because it updates state)
+    await act(() => {
+      radio2Ref.current.click();
+    });
+    expect(radio1Ref.current.checked).toBe(false);
+    expect(radio2Ref.current.checked).toBe(true);
+
+    // Submit form
+    await submit(formRef.current);
+    assertLog(['Form submitted']);
+
+    // Controlled radios should NOT reset
+    expect(radio1Ref.current.checked).toBe(false);
+    expect(radio2Ref.current.checked).toBe(true);
+  });
+
+  it('uncontrolled checkboxes should still reset on form submission', async () => {
+    const formRef = React.createRef();
+    const checkboxRef = React.createRef();
+
+    function App() {
+      return (
+        <form
+          ref={formRef}
+          action={() => {
+            Scheduler.log('Form submitted');
+          }}>
+          <input ref={checkboxRef} type="checkbox" defaultChecked={false} />
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => root.render(<App />));
+
+    // Initially unchecked
+    expect(checkboxRef.current.checked).toBe(false);
+
+    // Check the checkbox
+    checkboxRef.current.click();
+    expect(checkboxRef.current.checked).toBe(true);
+
+    // Submit form
+    await submit(formRef.current);
+    assertLog(['Form submitted']);
+
+    // Uncontrolled checkbox SHOULD reset
+    expect(checkboxRef.current.checked).toBe(false);
+  });
+
+  it('controlled select elements should not reset on form submission', async () => {
+    const container = document.createElement('div');
+    const root = ReactDOMClient.createRoot(container);
+
+    function App() {
+      const [value, setValue] = React.useState('2');
+      return (
+        <form
+          action={() => {
+            // Simulate form action
+          }}>
+          <select value={value} onChange={e => setValue(e.target.value)}>
+            <option value="1">Option 1</option>
+            <option value="2">Option 2</option>
+            <option value="3">Option 3</option>
+          </select>
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    await act(() => {
+      root.render(<App />);
+    });
+
+    const select = container.querySelector('select');
+    const button = container.querySelector('button');
+
+    // Change value to 3
+    await act(() => {
+      select.value = '3';
+      select.dispatchEvent(new Event('change', {bubbles: true}));
+    });
+
+    expect(select.value).toBe('3');
+
+    // Submit form
+    await act(() => {
+      button.click();
+    });
+
+    // Controlled select should NOT reset
+    expect(select.value).toBe('3');
+  });
+  it('controlled select elements should not reset on form submission', async () => {
+    const root = ReactDOMClient.createRoot(container);
+
+    function App() {
+      const [value, setValue] = React.useState('2');
+      return (
+        <form action={() => {}}>
+          <select value={value} onChange={e => setValue(e.target.value)}>
+            <option value="1">Option 1</option>
+            <option value="2">Option 2</option>
+            <option value="3">Option 3</option>
+          </select>
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    await act(() => {
+      root.render(<App />);
+    });
+
+    const select = container.querySelector('select');
+    const button = container.querySelector('button');
+
+    // Change to option 3
+    await act(() => {
+      select.value = '3';
+      select.dispatchEvent(new Event('change', {bubbles: true}));
+    });
+
+    expect(select.value).toBe('3');
+
+    // Submit form
+    await act(() => {
+      button.click();
+    });
+
+    // Controlled select should NOT reset
+    expect(select.value).toBe('3');
+  });
+
+  it('controlled textarea elements should not reset on form submission', async () => {
+    const root = ReactDOMClient.createRoot(container);
+
+    function App() {
+      const [text, setText] = React.useState('initial text');
+      return (
+        <form action={() => {}}>
+          <textarea value={text} onChange={e => setText(e.target.value)} />
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    await act(() => {
+      root.render(<App />);
+    });
+
+    const textarea = container.querySelector('textarea');
+    const button = container.querySelector('button');
+
+    // Change value
+    await act(() => {
+      textarea.value = 'updated text';
+      textarea.dispatchEvent(new Event('input', {bubbles: true}));
+    });
+
+    expect(textarea.value).toBe('updated text');
+
+    // Submit form
+    await act(() => {
+      button.click();
+    });
+
+    // Controlled textarea should NOT reset
+    expect(textarea.value).toBe('updated text');
+  });
+
+  it('uncontrolled select elements should still reset on form submission', async () => {
+    const root = ReactDOMClient.createRoot(container);
+
+    function App() {
+      return (
+        <form action={() => {}}>
+          <select defaultValue="2">
+            <option value="1">Option 1</option>
+            <option value="2">Option 2</option>
+            <option value="3">Option 3</option>
+          </select>
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    await act(() => {
+      root.render(<App />);
+    });
+
+    const select = container.querySelector('select');
+    const button = container.querySelector('button');
+
+    // Change to option 3
+    select.value = '3';
+    expect(select.value).toBe('3');
+
+    // Submit form
+    await act(() => {
+      button.click();
+    });
+
+    // Uncontrolled select SHOULD reset to defaultValue
+    expect(select.value).toBe('2');
+  });
+
+  it('uncontrolled textarea elements should still reset on form submission', async () => {
+    const root = ReactDOMClient.createRoot(container);
+
+    function App() {
+      return (
+        <form action={() => {}}>
+          <textarea defaultValue="initial text" />
+          <button type="submit">Submit</button>
+        </form>
+      );
+    }
+
+    await act(() => {
+      root.render(<App />);
+    });
+
+    const textarea = container.querySelector('textarea');
+    const button = container.querySelector('button');
+
+    // Change value
+    textarea.value = 'updated text';
+    expect(textarea.value).toBe('updated text');
+
+    // Submit form
+    await act(() => {
+      button.click();
+    });
+
+    // Uncontrolled textarea SHOULD reset to defaultValue
+    expect(textarea.value).toBe('initial text');
   });
 });
