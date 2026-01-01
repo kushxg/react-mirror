@@ -22,7 +22,9 @@ import {
   REACT_ELEMENT_TYPE,
   REACT_LAZY_TYPE,
   REACT_PORTAL_TYPE,
+  REACT_OPTIMISTIC_KEY,
 } from 'shared/ReactSymbols';
+import {enableOptimisticKey} from 'shared/ReactFeatureFlags';
 import {checkKeyStringCoercion} from 'shared/CheckStringCoercion';
 
 import {isValidElement, cloneAndReplaceKey} from './jsx/ReactJSXElement';
@@ -36,16 +38,19 @@ const SUBSEPARATOR = ':';
  * @param {string} key to be escaped.
  * @return {string} the escaped key.
  */
+const escapeRegex = /[=:]/g;
+const escaperLookup = {
+  '=': '=0',
+  ':': '=2',
+};
+
+function escapeKey(match: string): string {
+  // $FlowFixMe[invalid-computed-prop]
+  return escaperLookup[match];
+}
+
 function escape(key: string): string {
-  const escapeRegex = /[=:]/g;
-  const escaperLookup = {
-    '=': '=0',
-    ':': '=2',
-  };
-  const escapedString = key.replace(escapeRegex, function (match) {
-    // $FlowFixMe[invalid-computed-prop]
-    return escaperLookup[match];
-  });
+  const escapedString = key.replace(escapeRegex, escapeKey);
 
   return '$' + escapedString;
 }
@@ -73,6 +78,13 @@ function getElementKey(element: any, index: number): string {
   // Do some typechecking here since we call this blindly. We want to ensure
   // that we don't block potential future ES APIs.
   if (typeof element === 'object' && element !== null && element.key != null) {
+    if (enableOptimisticKey && element.key === REACT_OPTIMISTIC_KEY) {
+      // For React.Children purposes this is treated as just null.
+      if (__DEV__) {
+        console.error("React.Children helpers don't support optimisticKey.");
+      }
+      return index.toString(36);
+    }
     // Explicit key
     if (__DEV__) {
       checkKeyStringCoercion(element.key);
