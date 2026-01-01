@@ -40,6 +40,7 @@ export function getOwnerIframe(node: HTMLElement): HTMLElement | null {
 // offset added to compensate for its border.
 export function getBoundingClientRectWithBorderOffset(node: HTMLElement): Rect {
   const dimensions = getElementDimensions(node);
+  // $FlowFixMe[incompatible-variance]
   return mergeRectOffsets([
     node.getBoundingClientRect(),
     {
@@ -102,8 +103,10 @@ export function getNestedBoundingClientRect(
       }
     }
 
+    // $FlowFixMe[incompatible-variance]
     return mergeRectOffsets(rects);
   } else {
+    // $FlowFixMe[incompatible-variance]
     return node.getBoundingClientRect();
   }
 }
@@ -145,7 +148,7 @@ export function extractHOCNames(displayName: string): {
 } {
   if (!displayName) return {baseComponentName: '', hocNames: []};
 
-  const hocRegex = /([A-Z][a-zA-Z0-9]*?)\((.*)\)/g;
+  const hocRegex = /^([A-Z][a-zA-Z0-9]*?)\((.*)\)$/;
   const hocNames: string[] = [];
   let baseComponentName = displayName;
   let match;
