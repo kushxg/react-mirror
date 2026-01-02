@@ -83,7 +83,7 @@ var timerQueue: Array<Task> = [];
 var taskIdCounter = 1;
 
 var currentTask = null;
-var currentPriorityLevel = NormalPriority;
+var currentPriorityLevel: PriorityLevel = NormalPriority;
 
 // This is set while performing work, to prevent re-entrance.
 var isPerformingWork = false;
@@ -283,7 +283,7 @@ function unstable_runWithPriority<T>(
 }
 
 function unstable_next<T>(eventHandler: () => T): T {
-  var priorityLevel;
+  var priorityLevel: PriorityLevel;
   switch (currentPriorityLevel) {
     case ImmediatePriority:
     case UserBlockingPriority:
@@ -441,7 +441,7 @@ let taskTimeoutID: TimeoutID = (-1: any);
 // thread, like user events. By default, it yields multiple times per frame.
 // It does not attempt to align with frame boundaries, since most tasks don't
 // need to be frame aligned; for those that do, use requestAnimationFrame.
-let frameInterval = frameYieldMs;
+let frameInterval: number = frameYieldMs;
 let startTime = -1;
 
 function shouldYieldToHost(): boolean {
@@ -500,6 +500,14 @@ const performWorkUntilDeadline = () => {
     // remain true, and we'll continue the work loop.
     let hasMoreWork = true;
     try {
+      if (isPerformingWork) {
+        // A scheduled task triggered a host event (e.g. valid re-entry).
+        // If we process it now, we'll lose key context. Schedulers that
+        // support re-entry should verify that the queue is empty before
+        // processing.
+        // For now, we'll just yield.
+        return;
+      }
       hasMoreWork = flushWork(currentTime);
     } finally {
       if (hasMoreWork) {
