@@ -43,11 +43,22 @@ export const supportsClientAPIs = true;
 export const supportsRequestStorage = false;
 export const requestStorage: AsyncLocalStorage<Request | void> = (null: any);
 
+// No AsyncLocalStorage support in custom environment
+export function createAsyncContextSnapshot(): <T>(fn: () => T) => T {
+  return <T>(fn: () => T): T => fn();
+}
+
 export const bindToConsole = $$$config.bindToConsole;
 
 export const resetResumableState = $$$config.resetResumableState;
 export const completeResumableState = $$$config.completeResumableState;
 export const getChildFormatContext = $$$config.getChildFormatContext;
+export const getSuspenseFallbackFormatContext =
+  $$$config.getSuspenseFallbackFormatContext;
+export const getSuspenseContentFormatContext =
+  $$$config.getSuspenseContentFormatContext;
+export const getViewTransitionFormatContext =
+  $$$config.getViewTransitionFormatContext;
 export const makeId = $$$config.makeId;
 export const pushTextInstance = $$$config.pushTextInstance;
 export const pushStartInstance = $$$config.pushStartInstance;
@@ -98,4 +109,5 @@ export const writeHoistablesForBoundary = $$$config.writeHoistablesForBoundary;
 export const writePostamble = $$$config.writePostamble;
 export const hoistHoistables = $$$config.hoistHoistables;
 export const createHoistableState = $$$config.createHoistableState;
+export const hasSuspenseyContent = $$$config.hasSuspenseyContent;
 export const emitEarlyPreloads = $$$config.emitEarlyPreloads;

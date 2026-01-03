@@ -22,20 +22,20 @@ export const supportsComponentStorage: boolean =
 export const componentStorage: AsyncLocalStorage<ReactComponentInfo | void> =
   supportsComponentStorage ? new AsyncLocalStorage() : (null: any);
 
-// We use the Node version but get access to async_hooks from a global.
-import type {HookCallbacks, AsyncHook} from 'async_hooks';
-export const createAsyncHook: HookCallbacks => AsyncHook =
-  typeof async_hooks === 'object'
-    ? async_hooks.createHook
-    : function () {
-        return ({
-          enable() {},
-          disable() {},
-        }: any);
-      };
-export const executionAsyncId: () => number =
-  typeof async_hooks === 'object' ? async_hooks.executionAsyncId : (null: any);
+// AsyncLocalStorage.snapshot() captures the entire async context stack.
+const supportsAsyncContextSnapshot: boolean =
+  // $FlowFixMe[prop-missing]
+  supportsRequestStorage && typeof AsyncLocalStorage.snapshot === 'function';
 
-export * from '../ReactFlightServerConfigDebugNode';
+export function createAsyncContextSnapshot(): <T>(fn: () => T) => T {
+  if (supportsAsyncContextSnapshot) {
+    // $FlowFixMe[prop-missing]
+    return AsyncLocalStorage.snapshot();
+  }
+  return <T>(fn: () => T): T => fn();
+}
+
+export * from '../ReactFlightServerConfigDebugNoop';
 
 export * from '../ReactFlightStackConfigV8';
+export * from '../ReactServerConsoleConfigServer';

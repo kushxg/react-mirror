@@ -15,6 +15,7 @@ export * from '../ReactFlightServerConfigBundlerCustom';
 export * from '../ReactFlightServerConfigDebugNoop';
 
 export * from '../ReactFlightStackConfigV8';
+export * from '../ReactServerConsoleConfigPlain';
 
 export type Hints = any;
 export type HintCode = any;
@@ -28,6 +29,25 @@ export const supportsComponentStorage = false;
 export const componentStorage: AsyncLocalStorage<ReactComponentInfo | void> =
   (null: any);
 
+// No AsyncLocalStorage support in custom environment
+export function createAsyncContextSnapshot(): <T>(fn: () => T) => T {
+  return <T>(fn: () => T): T => fn();
+}
+
 export function createHints(): any {
   return null;
+}
+
+export type FormatContext = null;
+
+export function createRootFormatContext(): FormatContext {
+  return null;
+}
+
+export function getChildFormatContext(
+  parentContext: FormatContext,
+  type: string,
+  props: Object,
+): FormatContext {
+  return parentContext;
 }
