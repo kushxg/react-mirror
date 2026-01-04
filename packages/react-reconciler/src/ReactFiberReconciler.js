@@ -57,7 +57,7 @@ import {
   processChildContext,
   emptyContextObject,
   isContextProvider as isLegacyContextProvider,
-} from './ReactFiberContext';
+} from './ReactFiberLegacyContext';
 import {createFiberRoot} from './ReactFiberRoot';
 import {isRootDehydrated} from './ReactFiberShellHydration';
 import {
@@ -98,6 +98,7 @@ import {
   getHighestPriorityPendingLanes,
   higherPriorityLane,
   getBumpedLaneForHydrationByLane,
+  claimNextRetryLane,
 } from './ReactFiberLane';
 import {
   scheduleRefresh,
@@ -125,6 +126,7 @@ export {
   defaultOnRecoverableError,
 } from './ReactFiberErrorLogger';
 import {getLabelForLane, TotalLanes} from 'react-reconciler/src/ReactFiberLane';
+import {registerDefaultIndicator} from './ReactFiberAsyncAction';
 
 type OpaqueRoot = FiberRoot;
 
@@ -137,7 +139,7 @@ if (__DEV__) {
 }
 
 function getContextForSubtree(
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
 ): Object {
   if (!parentComponent) {
     return emptyContextObject;
@@ -247,7 +249,7 @@ export function createContainer(
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
@@ -259,7 +261,7 @@ export function createContainer(
 ): OpaqueRoot {
   const hydrate = false;
   const initialChildren = null;
-  return createFiberRoot(
+  const root = createFiberRoot(
     containerInfo,
     tag,
     hydrate,
@@ -274,6 +276,8 @@ export function createContainer(
     onDefaultTransitionIndicator,
     transitionCallbacks,
   );
+  registerDefaultIndicator(onDefaultTransitionIndicator);
+  return root;
 }
 
 export function createHydrationContainer(
@@ -295,7 +299,7 @@ export function createHydrationContainer(
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
@@ -323,6 +327,8 @@ export function createHydrationContainer(
     transitionCallbacks,
   );
 
+  registerDefaultIndicator(onDefaultTransitionIndicator);
+
   // TODO: Move this to FiberRoot constructor
   root.context = getContextForSubtree(null);
 
@@ -341,6 +347,7 @@ export function createHydrationContainer(
   update.callback =
     callback !== undefined && callback !== null ? callback : null;
   enqueueUpdate(current, update, lane);
+  startUpdateTimerByLane(lane, 'hydrateRoot()', null);
   scheduleInitialHydrationOnRoot(root, lane);
 
   return root;
@@ -349,7 +356,7 @@ export function createHydrationContainer(
 export function updateContainer(
   element: ReactNodeList,
   container: OpaqueRoot,
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
   callback: ?Function,
 ): Lane {
   const current = container.current;
@@ -368,7 +375,7 @@ export function updateContainer(
 export function updateContainerSync(
   element: ReactNodeList,
   container: OpaqueRoot,
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
   callback: ?Function,
 ): Lane {
   if (!disableLegacyMode && container.tag === LegacyRoot) {
@@ -391,7 +398,7 @@ function updateContainerImpl(
   lane: Lane,
   element: ReactNodeList,
   container: OpaqueRoot,
-  parentComponent: ?React$Component<any, any>,
+  parentComponent: ?component(...props: any),
   callback: ?Function,
 ): void {
   if (__DEV__) {
@@ -447,7 +454,7 @@ function updateContainerImpl(
 
   const root = enqueueUpdate(rootFiber, update, lane);
   if (root !== null) {
-    startUpdateTimerByLane(lane, 'root.render()');
+    startUpdateTimerByLane(lane, 'root.render()', null);
     scheduleUpdateOnFiber(root, rootFiber, lane);
     entangleTransitions(root, rootFiber, lane);
   }
@@ -465,7 +472,7 @@ export {
 
 export function getPublicRootInstance(
   container: OpaqueRoot,
-): React$Component<any, any> | PublicInstance | null {
+): component(...props: any) | PublicInstance | null {
   const containerFiber = container.current;
   if (!containerFiber.child) {
     return null;
@@ -593,6 +600,7 @@ let overrideProps = null;
 let overridePropsDeletePath = null;
 let overridePropsRenamePath = null;
 let scheduleUpdate = null;
+let scheduleRetry = null;
 let setErrorHandler = null;
 let setSuspenseHandler = null;
 
@@ -829,6 +837,14 @@ if (__DEV__) {
     }
   };
 
+  scheduleRetry = (fiber: Fiber) => {
+    const lane = claimNextRetryLane();
+    const root = enqueueConcurrentRenderForLane(fiber, lane);
+    if (root !== null) {
+      scheduleUpdateOnFiber(root, fiber, lane);
+    }
+  };
+
   setErrorHandler = (newShouldErrorImpl: Fiber => ?boolean) => {
     shouldErrorImpl = newShouldErrorImpl;
   };
@@ -873,28 +889,30 @@ export function injectIntoDevTools(): boolean {
     internals.rendererConfig = (extraDevToolsConfig: RendererInspectionConfig);
   }
   if (__DEV__) {
-    internals.overrideHookState = overrideHookState;
-    internals.overrideHookStateDeletePath = overrideHookStateDeletePath;
-    internals.overrideHookStateRenamePath = overrideHookStateRenamePath;
-    internals.overrideProps = overrideProps;
-    internals.overridePropsDeletePath = overridePropsDeletePath;
-    internals.overridePropsRenamePath = overridePropsRenamePath;
-    internals.scheduleUpdate = scheduleUpdate;
-    internals.setErrorHandler = setErrorHandler;
-    internals.setSuspenseHandler = setSuspenseHandler;
-    // React Refresh
-    internals.scheduleRefresh = scheduleRefresh;
-    internals.scheduleRoot = scheduleRoot;
-    internals.setRefreshHandler = setRefreshHandler;
-    // Enables DevTools to append owner stacks to error messages in DEV mode.
-    internals.getCurrentFiber = getCurrentFiberForDevTools;
-  }
-  if (enableSchedulingProfiler) {
-    // Conditionally inject these hooks only if Timeline profiler is supported by this build.
-    // This gives DevTools a way to feature detect that isn't tied to version number
-    // (since profiling and timeline are controlled by different feature flags).
-    internals.getLaneLabelMap = getLaneLabelMap;
-    internals.injectProfilingHooks = injectProfilingHooks;
-  }
-  return injectInternals(internals);
+  internals.getCurrentFiber = getCurrentFiberForDevTools;
+}
+if (enableSchedulingProfiler) {
+  internals.getLaneLabelMap = getLaneLabelMap;
+  internals.injectProfilingHooks = injectProfilingHooks;
+}
+return injectInternals(internals);
+if (__DEV__) {
+  Object.defineProperty(internals, 'flushSync', {
+    configurable: false,
+    enumerable: false,
+    get() {
+      console.error(
+        'reconciler.flushSync has been removed. ' +
+          'Use reconciler.updateContainerSync() ' +
+          'followed by reconciler.flushSyncWork() instead.'
+      );
+
+      return function flushSyncDeprecated(fn) {
+        if (typeof fn === 'function') {
+          fn();
+        }
+        internals.flushSyncWork();
+      };
+    },
+  });
 }
