@@ -14,6 +14,7 @@ import type {
   Thenable,
   RejectedThenable,
   Awaited,
+  ReactExternalDataSource,
 } from 'shared/ReactTypes';
 import type {
   Fiber,
@@ -39,6 +40,7 @@ import {
   enableSchedulingProfiler,
   enableTransitionTracing,
   enableUseEffectEventHook,
+  enableStore,
   enableLegacyCache,
   disableLegacyMode,
   enableNoCloningMemoCache,
@@ -55,7 +57,6 @@ import {
   ConcurrentMode,
   StrictEffectsMode,
   StrictLegacyMode,
-  NoStrictPassiveEffectsMode,
 } from './ReactTypeOfMode';
 import {
   NoLane,
@@ -74,6 +75,9 @@ import {
   includesSomeLane,
   isGestureRender,
   GestureLane,
+  UpdateLanes,
+  includesTransitionLane,
+  SomeTransitionLane,
 } from './ReactFiberLane';
 import {
   ContinuousEventPriority,
@@ -123,7 +127,10 @@ import {
   markStateUpdateScheduled,
   setIsStrictModeForDevtools,
 } from './ReactFiberDevToolsHook';
-import {startUpdateTimerByLane} from './ReactProfilerTimer';
+import {
+  startUpdateTimerByLane,
+  startHostActionTimer,
+} from './ReactProfilerTimer';
 import {createCache} from './ReactFiberCacheComponent';
 import {
   createUpdate as createLegacyQueueUpdate,
@@ -158,6 +165,8 @@ import {requestCurrentTransition} from './ReactFiberTransition';
 import {callComponentInDEV} from './ReactFiberCallUserSpace';
 
 import {scheduleGesture} from './ReactFiberGestureScheduler';
+import type {StoreWrapper} from './ReactFiberStoreTracking'; // Ensure StoreTracking is loaded} from './ReactFiberStoreTracking'; // Ensure StoreTracking is loaded
+import {StoreTracker} from './ReactFiberStoreTracking'; // Ensure StoreTracking is loaded
 
 export type Update<S, A> = {
   lane: Lane,
@@ -1206,7 +1215,7 @@ function useMemoCache(size: number): Array<mixed> {
               ? currentMemoCache.data
               : // Clone the memo cache before each render (copy-on-write)
                 currentMemoCache.data.map(array => array.slice()),
-            index: 0,
+            index: 0 as number,
           };
         }
       }
@@ -1216,7 +1225,7 @@ function useMemoCache(size: number): Array<mixed> {
   if (memoCache == null) {
     memoCache = {
       data: [],
-      index: 0,
+      index: 0 as number,
     };
   }
   if (updateQueue === null) {
@@ -1805,6 +1814,265 @@ function updateSyncExternalStore<T>(
   return nextSnapshot;
 }
 
+function identity<T>(x: T): T {
+  return x;
+}
+
+function storeReducerPlaceholder<S, A>(state: S, action: A): S {
+  // This reducer is never called because we handle updates in the subscription.
+  throw new Error(
+    'storeReducer should never be called. This is a bug in React. Please file an issue.',
+  );
+}
+
+type UseStoreArgs<S, T> = {
+  wrapper: StoreWrapper<S, mixed>,
+  selector: S => T,
+};
+
+function mountStore<S, T>(
+  store: ReactExternalDataSource<S, mixed>,
+  selector?: S => T,
+): T {
+  const actualSelector: S => T =
+    selector === undefined ? (identity: any) : selector;
+  const root = ((getWorkInProgressRoot(): any): FiberRoot);
+  if (root.storeTracker === null) {
+    root.storeTracker = new StoreTracker();
+  }
+
+  const wrapper = root.storeTracker.getWrapper(store);
+  const fiber = currentlyRenderingFiber;
+  const storeState = wrapper.getStateForLanes(renderLanes);
+
+  const initialState = actualSelector(storeState);
+
+  const hook = mountWorkInProgressHook();
+
+  const hookArgs: UseStoreArgs<S, T> = {
+    wrapper,
+    selector: actualSelector,
+  };
+
+  hook.memoizedState = hook.baseState = initialState;
+  const queue: UpdateQueue<T, mixed> = {
+    pending: null,
+    lanes: NoLanes,
+    // Hack: We don't use dispatch for anything, so we can repurpose
+    // it to store the args for access inside updateStore.
+    dispatch: hookArgs as any,
+    lastRenderedReducer: storeReducerPlaceholder,
+    lastRenderedState: (initialState: any),
+  };
+  hook.queue = queue;
+
+  mountEffect(
+    createSubscription.bind(
+      null,
+      wrapper,
+      fiber,
+      actualSelector,
+      queue,
+      storeState,
+    ),
+    [actualSelector, wrapper],
+  );
+
+  return initialState;
+}
+
+function updateStore<S, T>(
+  store: ReactExternalDataSource<S, mixed>,
+  selector?: S => T,
+): T {
+  const actualSelector: S => T =
+    selector === undefined ? (identity: any) : selector;
+  const root = ((getWorkInProgressRoot(): any): FiberRoot);
+  if (root.storeTracker === null) {
+    root.storeTracker = new StoreTracker();
+  }
+
+  const wrapper = root.storeTracker.getWrapper(store);
+  const hook = updateWorkInProgressHook();
+  const storeState = wrapper.getStateForLanes(renderLanes);
+  const [state, _previousArgs] = updateReducerImpl<T, mixed>(
+    hook,
+    ((currentHook: any): Hook),
+    storeReducerPlaceholder,
+  );
+  const previousArgs: UseStoreArgs<S, T> = (_previousArgs: any);
+
+  const fiber = currentlyRenderingFiber;
+  const queue = hook.queue;
+
+  updateEffect(
+    createSubscription.bind(
+      null,
+      wrapper,
+      fiber,
+      actualSelector,
+      queue,
+      storeState,
+    ),
+    [actualSelector, wrapper],
+  );
+
+  // If the arguments have changed since last render, our hook/queue state is
+  // invalid.
+  if (
+    previousArgs.selector !== actualSelector ||
+    previousArgs.wrapper !== wrapper
+  ) {
+    queue.dispatch = {wrapper, selector: actualSelector};
+    return (hook.memoizedState = queue.lastRenderedState =
+      actualSelector(storeState));
+  }
+
+  return state;
+}
+
+// Subscribes to the store and ensures updates are scheduled for any pending
+// transitions.
+function createSubscription<S, T>(
+  storeWrapper: StoreWrapper<S, mixed>,
+  fiber: Fiber,
+  selector: S => T,
+  queue: UpdateQueue<T, mixed>,
+  storeState: S,
+): () => void {
+  // If we are mounting mid-transition, we need to schedule an update to
+  // bring the selected state up to date with the transition state.
+  const mountTransitionState =
+    storeWrapper.getStateForLanes(SomeTransitionLane);
+  if (!is(storeState, mountTransitionState)) {
+    const newState = selector(mountTransitionState);
+    // TODO: It's possible this is the same as the existing mount state. In that
+    // case we could avoid triggering a redundant update.
+    const lane = SomeTransitionLane;
+    const update: Update<T, mixed> = {
+      lane,
+      revertLane: NoLane,
+      gesture: null,
+      action: null,
+      hasEagerState: true,
+      eagerState: newState,
+      next: (null: any),
+    };
+
+    const updateRoot = enqueueConcurrentHookUpdate(fiber, queue, update, lane);
+    if (updateRoot !== null) {
+      startUpdateTimerByLane(
+        lane,
+        'useStore mount mid transition fixup',
+        fiber,
+      );
+      scheduleUpdateOnFiber(updateRoot, fiber, lane);
+      entangleTransitionUpdate(updateRoot, queue, lane);
+    }
+  }
+  return storeWrapper.subscribe(
+    handleStoreSubscriptionChange.bind(
+      null,
+      fiber,
+      queue,
+      storeWrapper,
+      selector,
+    ),
+  );
+}
+
+function handleStoreSubscriptionChange<S, A, T>(
+  fiber: Fiber,
+  queue: UpdateQueue<T, mixed>,
+  storeWrapper: StoreWrapper<S, A>,
+  selector: (state: S) => T,
+): void {
+  const lane = requestUpdateLane(fiber);
+  // Eagerly compute the new selected state
+  const newState = selector(storeWrapper.getStateForLanes(lane));
+
+  if (
+    queue.lanes === NoLanes &&
+    queue.pending === null &&
+    is(newState, queue.lastRenderedState)
+  ) {
+    // Our last render is current and there are no other updates pending. If the
+    // state is unchanged, we don't need to rerender.
+
+    // In other similar places we call `enqueueConcurrentHookUpdateAndEagerlyBailout`
+    // but we don't need to here because we don't use update ordering to
+    // manage rebasing, we do it ourselves eagerly.
+    return;
+  }
+
+  const update: Update<T, mixed> = {
+    lane,
+    revertLane: NoLane,
+    gesture: null,
+    action: null,
+    hasEagerState: true,
+    eagerState: newState,
+    next: (null: any),
+  };
+
+  const hasQueuedTransitionUpdate = includesTransitionLane(queue.lanes);
+
+  const root = enqueueConcurrentHookUpdate(fiber, queue, update, lane);
+  if (root !== null) {
+    startUpdateTimerByLane(lane, 'store.dispatch()', fiber);
+    scheduleUpdateOnFiber(root, fiber, lane);
+    entangleTransitionUpdate(root, queue, lane);
+  }
+
+  // The way React's update ordering works is that for each render we apply
+  // the updates for that render's lane, and skip over any updates that don't
+  // have sufficient priority. For normal reducer updates this means that we
+  // will:
+  // 1. Apply a sync update on top of the currently committed state.
+  // 2. Reattempt the pending transition update, this time with the sync
+  //    update applied on top.
+  //
+  // However, we don't want each individual component's update to have to
+  // re-rerun the store's reducer in order to achieve this update reordering.
+  // Instead, if we know there is a pending transition update, we simply
+  // enqueue yet another transition update on top.
+  // The sync render will ignore this update but the subsequent transition render
+  // will apply it, giving us the desired final state.
+  //
+  // Ideally we could define a custom approach for store selector states, but
+  // for now this lets us reuse all of the very complex updateReducerImpl logic
+  // without changes.
+  if (hasQueuedTransitionUpdate && !isTransitionLane(lane)) {
+    // Current entanglement semantics mean we can pick an arbitrary transition
+    // lane here and be sure the update will get entangled with any/all other
+    // transitions.
+    const transitionLane = SomeTransitionLane;
+    const transitionState = selector(
+      storeWrapper.getStateForLanes(transitionLane),
+    );
+    const transitionUpdate: Update<T, mixed> = {
+      lane: transitionLane,
+      revertLane: NoLane,
+      gesture: null,
+      action: null,
+      hasEagerState: true,
+      eagerState: transitionState,
+      next: (null: any),
+    };
+    const transitionRoot = enqueueConcurrentHookUpdate(
+      fiber,
+      queue,
+      transitionUpdate,
+      transitionLane,
+    );
+    if (transitionRoot !== null) {
+      startUpdateTimerByLane(transitionLane, 'store.dispatch()', fiber);
+      scheduleUpdateOnFiber(transitionRoot, fiber, transitionLane);
+      entangleTransitionUpdate(transitionRoot, queue, transitionLane);
+    }
+  }
+}
+
 function pushStoreConsistencyCheck<T>(
   fiber: Fiber,
   getSnapshot: () => T,
@@ -1844,7 +2112,7 @@ function updateStoreInstance<T>(
   // Something may have been mutated in between render and commit. This could
   // have been in an event that fired before the passive effects, or it could
   // have been in a layout effect. In that case, we would have used the old
-  // snapsho and getSnapshot values to bail out. We need to check one more time.
+  // snapshot and getSnapshot values to bail out. We need to check one more time.
   if (checkIfSnapshotChanged(inst)) {
     // Force a re-render.
     // We intentionally don't log update times and stacks here because this
@@ -1863,7 +2131,7 @@ function subscribeToStore<T>(
     // read from the store.
     if (checkIfSnapshotChanged(inst)) {
       // Force a re-render.
-      startUpdateTimerByLane(SyncLane, 'updateSyncExternalStore()');
+      startUpdateTimerByLane(SyncLane, 'updateSyncExternalStore()', fiber);
       forceStoreRerender(fiber);
     }
   };
@@ -2672,8 +2940,7 @@ function mountEffect(
 ): void {
   if (
     __DEV__ &&
-    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode &&
-    (currentlyRenderingFiber.mode & NoStrictPassiveEffectsMode) === NoMode
+    (currentlyRenderingFiber.mode & StrictEffectsMode) !== NoMode
   ) {
     mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
@@ -2982,6 +3249,20 @@ function rerenderDeferredValue<T>(value: T, initialValue?: T): T {
   }
 }
 
+function isRenderingDeferredWork(): boolean {
+  if (!includesSomeLane(renderLanes, DeferredLane)) {
+    // None of the render lanes are deferred lanes.
+    return false;
+  }
+  // At least one of the render lanes are deferred lanes. However, if the
+  // current render is also batched together with an update, then we can't
+  // say that the render is wholly the result of deferred work. We can check
+  // this by checking if the root render lanes contain any "update" lanes, i.e.
+  // lanes that are only assigned to updates, like setState.
+  const rootRenderLanes = getWorkInProgressRootRenderLanes();
+  return !includesSomeLane(rootRenderLanes, UpdateLanes);
+}
+
 function mountDeferredValueImpl<T>(hook: Hook, value: T, initialValue?: T): T {
   if (
     // When `initialValue` is provided, we defer the initial render even if the
@@ -2990,7 +3271,7 @@ function mountDeferredValueImpl<T>(hook: Hook, value: T, initialValue?: T): T {
     // However, to avoid waterfalls, we do not defer if this render
     // was itself spawned by an earlier useDeferredValue. Check if DeferredLane
     // is part of the render lanes.
-    !includesSomeLane(renderLanes, DeferredLane)
+    !isRenderingDeferredWork()
   ) {
     // Render with the initial value
     hook.memoizedState = initialValue;
@@ -3037,8 +3318,7 @@ function updateDeferredValueImpl<T>(
     }
 
     const shouldDeferValue =
-      !includesOnlyNonUrgentLanes(renderLanes) &&
-      !includesSomeLane(renderLanes, DeferredLane);
+      !includesOnlyNonUrgentLanes(renderLanes) && !isRenderingDeferredWork();
     if (shouldDeferValue) {
       // This is an urgent update. Since the value has changed, keep using the
       // previous value and spawn a deferred render to update it later.
@@ -3240,6 +3520,8 @@ export function startHostTransition<F>(
     Thenable<TransitionStatus> | TransitionStatus,
     BasicStateAction<Thenable<TransitionStatus> | TransitionStatus>,
   > = stateHook.queue;
+
+  startHostActionTimer(formFiber);
 
   startTransition(
     formFiber,
@@ -3446,7 +3728,7 @@ function mountId(): string {
     const treeId = getTreeId();
 
     // Use a captial R prefix for server-generated ids.
-    id = '\u00AB' + identifierPrefix + 'R' + treeId;
+    id = '_' + identifierPrefix + 'R_' + treeId;
 
     // Unless this is the first id at this level, append a number at the end
     // that represents the position of this useId hook among all the useId
@@ -3456,16 +3738,11 @@ function mountId(): string {
       id += 'H' + localId.toString(32);
     }
 
-    id += '\u00BB';
+    id += '_';
   } else {
     // Use a lowercase r prefix for client-generated ids.
     const globalClientId = globalClientIdCounter++;
-    id =
-      '\u00AB' +
-      identifierPrefix +
-      'r' +
-      globalClientId.toString(32) +
-      '\u00BB';
+    id = '_' + identifierPrefix + 'r_' + globalClientId.toString(32) + '_';
   }
 
   hook.memoizedState = id;
@@ -3506,7 +3783,7 @@ function refreshCache<T>(fiber: Fiber, seedKey: ?() => T, seedValue: T): void {
         const refreshUpdate = createLegacyQueueUpdate(lane);
         const root = enqueueLegacyQueueUpdate(provider, refreshUpdate, lane);
         if (root !== null) {
-          startUpdateTimerByLane(lane, 'refresh()');
+          startUpdateTimerByLane(lane, 'refresh()', fiber);
           scheduleUpdateOnFiber(root, provider, lane);
           entangleLegacyQueueTransitions(root, provider, lane);
         }
@@ -3575,7 +3852,7 @@ function dispatchReducerAction<S, A>(
   } else {
     const root = enqueueConcurrentHookUpdate(fiber, queue, update, lane);
     if (root !== null) {
-      startUpdateTimerByLane(lane, 'dispatch()');
+      startUpdateTimerByLane(lane, 'dispatch()', fiber);
       scheduleUpdateOnFiber(root, fiber, lane);
       entangleTransitionUpdate(root, queue, lane);
     }
@@ -3609,7 +3886,7 @@ function dispatchSetState<S, A>(
     lane,
   );
   if (didScheduleUpdate) {
-    startUpdateTimerByLane(lane, 'setState()');
+    startUpdateTimerByLane(lane, 'setState()', fiber);
   }
   markUpdateInDevTools(fiber, lane, action);
 }
@@ -3771,7 +4048,7 @@ function dispatchOptimisticSetState<S, A>(
       // will never be attempted before the optimistic update. This currently
       // holds because the optimistic update is always synchronous. If we ever
       // change that, we'll need to account for this.
-      startUpdateTimerByLane(lane, 'setOptimistic()');
+      startUpdateTimerByLane(lane, 'setOptimistic()', fiber);
       scheduleUpdateOnFiber(root, fiber, lane);
       // Optimistic updates are always synchronous, so we don't need to call
       // entangleTransitionUpdate here.
@@ -3878,6 +4155,9 @@ export const ContextOnlyDispatcher: Dispatcher = {
 if (enableUseEffectEventHook) {
   (ContextOnlyDispatcher: Dispatcher).useEffectEvent = throwInvalidHookError;
 }
+if (enableStore) {
+  (ContextOnlyDispatcher: Dispatcher).useStore = throwInvalidHookError;
+}
 
 const HooksDispatcherOnMount: Dispatcher = {
   readContext,
@@ -3907,6 +4187,9 @@ const HooksDispatcherOnMount: Dispatcher = {
 };
 if (enableUseEffectEventHook) {
   (HooksDispatcherOnMount: Dispatcher).useEffectEvent = mountEvent;
+}
+if (enableStore) {
+  (HooksDispatcherOnMount: Dispatcher).useStore = mountStore;
 }
 
 const HooksDispatcherOnUpdate: Dispatcher = {
@@ -3938,6 +4221,9 @@ const HooksDispatcherOnUpdate: Dispatcher = {
 if (enableUseEffectEventHook) {
   (HooksDispatcherOnUpdate: Dispatcher).useEffectEvent = updateEvent;
 }
+if (enableStore) {
+  (HooksDispatcherOnUpdate: Dispatcher).useStore = updateStore;
+}
 
 const HooksDispatcherOnRerender: Dispatcher = {
   readContext,
@@ -3967,6 +4253,9 @@ const HooksDispatcherOnRerender: Dispatcher = {
 };
 if (enableUseEffectEventHook) {
   (HooksDispatcherOnRerender: Dispatcher).useEffectEvent = updateEvent;
+}
+if (enableStore) {
+  (HooksDispatcherOnRerender: Dispatcher).useStore = updateStore;
 }
 
 let HooksDispatcherOnMountInDEV: Dispatcher | null = null;
@@ -4118,6 +4407,14 @@ if (__DEV__) {
       mountHookTypesDev();
       return mountSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
     },
+    useStore<S, T>(
+      store: ReactExternalDataSource<S, mixed>,
+      selector?: (state: S) => T,
+    ): T {
+      currentHookNameInDev = 'useStore';
+      mountHookTypesDev();
+      return mountStore(store, selector);
+    },
     useId(): string {
       currentHookNameInDev = 'useId';
       mountHookTypesDev();
@@ -4167,6 +4464,16 @@ if (__DEV__) {
         mountHookTypesDev();
         return mountEvent(callback);
       };
+  }
+  if (enableStore) {
+    (HooksDispatcherOnMountInDEV: Dispatcher).useStore = function useStore<
+      S,
+      T,
+    >(store: ReactExternalDataSource<S, mixed>, selector?: (state: S) => T): T {
+      currentHookNameInDev = 'useStore';
+      mountHookTypesDev();
+      return mountStore(store, selector);
+    };
   }
 
   HooksDispatcherOnMountWithHookTypesInDEV = {
@@ -4285,6 +4592,14 @@ if (__DEV__) {
       updateHookTypesDev();
       return mountSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
     },
+    useStore<S, T>(
+      store: ReactExternalDataSource<S, mixed>,
+      selector?: (state: S) => T,
+    ): T {
+      currentHookNameInDev = 'useStore';
+      updateHookTypesDev();
+      return mountStore(store, selector);
+    },
     useId(): string {
       currentHookNameInDev = 'useId';
       updateHookTypesDev();
@@ -4333,6 +4648,17 @@ if (__DEV__) {
         currentHookNameInDev = 'useEffectEvent';
         updateHookTypesDev();
         return mountEvent(callback);
+      };
+  }
+  if (enableStore) {
+    (HooksDispatcherOnMountWithHookTypesInDEV: Dispatcher).useStore =
+      function useStore<S, T>(
+        store: ReactExternalDataSource<S, mixed>,
+        selector?: (state: S) => T,
+      ): T {
+        currentHookNameInDev = 'useStore';
+        updateHookTypesDev();
+        return mountStore(store, selector);
       };
   }
 
@@ -4452,6 +4778,14 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
     },
+    useStore<S, T>(
+      store: ReactExternalDataSource<S, mixed>,
+      selector?: (state: S) => T,
+    ): T {
+      currentHookNameInDev = 'useStore';
+      updateHookTypesDev();
+      return updateStore(store, selector);
+    },
     useId(): string {
       currentHookNameInDev = 'useId';
       updateHookTypesDev();
@@ -4501,6 +4835,16 @@ if (__DEV__) {
         updateHookTypesDev();
         return updateEvent(callback);
       };
+  }
+  if (enableStore) {
+    (HooksDispatcherOnUpdateInDEV: Dispatcher).useStore = function useStore<
+      S,
+      T,
+    >(store: ReactExternalDataSource<S, mixed>, selector?: (state: S) => T): T {
+      currentHookNameInDev = 'useStore';
+      updateHookTypesDev();
+      return updateStore(store, selector);
+    };
   }
 
   HooksDispatcherOnRerenderInDEV = {
@@ -4619,6 +4963,14 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
     },
+    useStore<S, T>(
+      store: ReactExternalDataSource<S, mixed>,
+      selector?: (state: S) => T,
+    ): T {
+      currentHookNameInDev = 'useStore';
+      updateHookTypesDev();
+      return updateStore(store, selector);
+    },
     useId(): string {
       currentHookNameInDev = 'useId';
       updateHookTypesDev();
@@ -4668,6 +5020,16 @@ if (__DEV__) {
         updateHookTypesDev();
         return updateEvent(callback);
       };
+  }
+  if (enableStore) {
+    (HooksDispatcherOnRerenderInDEV: Dispatcher).useStore = function useStore<
+      S,
+      T,
+    >(store: ReactExternalDataSource<S, mixed>, selector?: (state: S) => T): T {
+      currentHookNameInDev = 'useStore';
+      updateHookTypesDev();
+      return updateStore(store, selector);
+    };
   }
 
   InvalidNestedHooksDispatcherOnMountInDEV = {
@@ -4804,6 +5166,15 @@ if (__DEV__) {
       mountHookTypesDev();
       return mountSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
     },
+    useStore<S, T>(
+      store: ReactExternalDataSource<S, mixed>,
+      selector?: (state: S) => T,
+    ): T {
+      currentHookNameInDev = 'useStore';
+      warnInvalidHookAccess();
+      mountHookTypesDev();
+      return mountStore(store, selector);
+    },
     useId(): string {
       currentHookNameInDev = 'useId';
       warnInvalidHookAccess();
@@ -4859,6 +5230,18 @@ if (__DEV__) {
         warnInvalidHookAccess();
         mountHookTypesDev();
         return mountEvent(callback);
+      };
+  }
+  if (enableStore) {
+    (InvalidNestedHooksDispatcherOnMountInDEV: Dispatcher).useStore =
+      function useStore<S, T>(
+        store: ReactExternalDataSource<S, mixed>,
+        selector?: (state: S) => T,
+      ): T {
+        currentHookNameInDev = 'useStore';
+        warnInvalidHookAccess();
+        mountHookTypesDev();
+        return mountStore(store, selector);
       };
   }
 
@@ -4996,6 +5379,15 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
     },
+    useStore<S, T>(
+      store: ReactExternalDataSource<S, mixed>,
+      selector?: (state: S) => T,
+    ): T {
+      currentHookNameInDev = 'useStore';
+      warnInvalidHookAccess();
+      updateHookTypesDev();
+      return updateStore(store, selector);
+    },
     useId(): string {
       currentHookNameInDev = 'useId';
       warnInvalidHookAccess();
@@ -5051,6 +5443,18 @@ if (__DEV__) {
         warnInvalidHookAccess();
         updateHookTypesDev();
         return updateEvent(callback);
+      };
+  }
+  if (enableStore) {
+    (InvalidNestedHooksDispatcherOnUpdateInDEV: Dispatcher).useStore =
+      function useStore<S, T>(
+        store: ReactExternalDataSource<S, mixed>,
+        selector?: (state: S) => T,
+      ): T {
+        currentHookNameInDev = 'useStore';
+        warnInvalidHookAccess();
+        updateHookTypesDev();
+        return updateStore(store, selector);
       };
   }
 
@@ -5188,6 +5592,15 @@ if (__DEV__) {
       updateHookTypesDev();
       return updateSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
     },
+    useStore<S, T>(
+      store: ReactExternalDataSource<S, mixed>,
+      selector?: (state: S) => T,
+    ): T {
+      currentHookNameInDev = 'useStore';
+      warnInvalidHookAccess();
+      updateHookTypesDev();
+      return updateStore(store, selector);
+    },
     useId(): string {
       currentHookNameInDev = 'useId';
       warnInvalidHookAccess();
@@ -5243,6 +5656,18 @@ if (__DEV__) {
         warnInvalidHookAccess();
         updateHookTypesDev();
         return updateEvent(callback);
+      };
+  }
+  if (enableStore) {
+    (InvalidNestedHooksDispatcherOnRerenderInDEV: Dispatcher).useStore =
+      function useStore<S, T>(
+        store: ReactExternalDataSource<S, mixed>,
+        selector?: (state: S) => T,
+      ): T {
+        currentHookNameInDev = 'useStore';
+        warnInvalidHookAccess();
+        updateHookTypesDev();
+        return updateStore(store, selector);
       };
   }
 }

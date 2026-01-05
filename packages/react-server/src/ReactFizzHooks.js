@@ -16,6 +16,7 @@ import type {
   Usable,
   ReactCustomFormAction,
   Awaited,
+  ReactExternalDataSource,
 } from 'shared/ReactTypes';
 
 import type {ResumableState} from './ReactFizzConfig';
@@ -38,7 +39,7 @@ import {
 } from './ReactFizzConfig';
 import {createFastHash} from './ReactServerStreamConfig';
 
-import {enableUseEffectEventHook} from 'shared/ReactFeatureFlags';
+import {enableUseEffectEventHook, enableStore} from 'shared/ReactFeatureFlags';
 import is from 'shared/objectIs';
 import {
   REACT_CONTEXT_TYPE,
@@ -564,6 +565,13 @@ function useSyncExternalStore<T>(
   return getServerSnapshot();
 }
 
+function useStore<S, T>(
+  store: ReactExternalDataSource<S, mixed>,
+  selector?: (state: S) => T,
+): T {
+  throw new Error('useStore is not yet supported during server rendering.');
+}
+
 function useDeferredValue<T>(value: T, initialValue?: T): T {
   resolveCurrentlyRenderingComponent();
   return initialValue !== undefined ? initialValue : value;
@@ -862,6 +870,11 @@ export const HooksDispatcher: Dispatcher = supportsClientAPIs
 
 if (enableUseEffectEventHook) {
   HooksDispatcher.useEffectEvent = useEffectEvent;
+}
+if (enableStore) {
+  HooksDispatcher.useStore = supportsClientAPIs
+    ? useStore
+    : clientHookNotSupported;
 }
 
 export let currentResumableState: null | ResumableState = (null: any);

@@ -17,6 +17,8 @@ import type {
   Awaited,
   ReactComponentInfo,
   ReactDebugInfo,
+  ReactKey,
+  ReactExternalDataSource,
 } from 'shared/ReactTypes';
 import type {TransitionTypes} from 'react/src/ReactTransitionType';
 import type {WorkTag} from './ReactWorkTags';
@@ -40,6 +42,7 @@ import type {ConcurrentUpdate} from './ReactFiberConcurrentUpdates';
 import type {ComponentStackNode} from 'react-server/src/ReactFizzComponentStack';
 import type {ThenableState} from './ReactFiberThenable';
 import type {ScheduledGesture} from './ReactFiberGestureScheduler';
+import type {StoreTracker} from './ReactFiberStoreTracking';
 
 // Unwind Circular: moved from ReactFiberHooks.old
 export type HookType =
@@ -58,6 +61,7 @@ export type HookType =
   | 'useDeferredValue'
   | 'useTransition'
   | 'useSyncExternalStore'
+  | 'useStore'
   | 'useId'
   | 'useCacheRefresh'
   | 'useOptimistic'
@@ -100,7 +104,7 @@ export type Fiber = {
   tag: WorkTag,
 
   // Unique identifier of this child.
-  key: null | string,
+  key: ReactKey,
 
   // The value of element.type which is used to preserve the identity during
   // reconciliation of this child.
@@ -200,7 +204,7 @@ export type Fiber = {
 
   _debugInfo?: ReactDebugInfo | null,
   _debugOwner?: ReactComponentInfo | Fiber | null,
-  _debugStack?: string | Error | null,
+  _debugStack?: Error | null,
   _debugTask?: ConsoleTask | null,
   _debugNeedsRemount?: boolean,
 
@@ -230,6 +234,8 @@ type BaseFiberRootProperties = {
   cancelPendingCommit: null | (() => void),
   // Top context object, used by renderSubtreeIntoContainer
   context: Object | null,
+
+  storeTracker: StoreTracker | null,
   pendingContext: Object | null,
 
   // Used to create a linked list that represent all the roots that have
@@ -248,6 +254,7 @@ type BaseFiberRootProperties = {
   pingedLanes: Lanes,
   warmLanes: Lanes,
   expiredLanes: Lanes,
+  indicatorLanes: Lanes, // enableDefaultTransitionIndicator only
   errorRecoveryDisabledLanes: Lanes,
   shellSuspendCounter: number,
 
@@ -272,7 +279,7 @@ type BaseFiberRootProperties = {
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
@@ -280,7 +287,9 @@ type BaseFiberRootProperties = {
     errorInfo: {+componentStack?: ?string},
   ) => void,
 
+  // enableDefaultTransitionIndicator only
   onDefaultTransitionIndicator: () => void | (() => void),
+  pendingIndicator: null | (() => void),
 
   formState: ReactFormState<any, any> | null,
 
@@ -434,6 +443,11 @@ export type Dispatcher = {
     getSnapshot: () => T,
     getServerSnapshot?: () => T,
   ): T,
+  // TODO: Non-nullable once `enableStore` is on everywhere.
+  useStore?: <S, T>(
+    store: ReactExternalDataSource<S, mixed>,
+    selector?: (state: S) => T,
+  ) => S | T,
   useId(): string,
   useCacheRefresh: () => <T>(?() => T, ?T) => void,
   useMemoCache: (size: number) => Array<any>,
@@ -456,6 +470,7 @@ export type Dispatcher = {
 
 export type AsyncDispatcher = {
   getCacheForType: <T>(resourceType: () => T) => T,
+  cacheSignal: () => null | AbortSignal,
   // DEV-only
   getOwner: () => null | Fiber | ReactComponentInfo | ComponentStackNode,
 };

@@ -13,6 +13,7 @@ import type {
   StartTransitionOptions,
   Usable,
   Awaited,
+  ReactExternalDataSource,
 } from 'shared/ReactTypes';
 import {REACT_CONSUMER_TYPE} from 'shared/ReactSymbols';
 
@@ -196,6 +197,15 @@ export function useSyncExternalStore<T>(
     getSnapshot,
     getServerSnapshot,
   );
+}
+
+export function useStore<S, T>(
+  store: ReactExternalDataSource<S, mixed>,
+  selector?: (state: S) => T,
+): S | T {
+  const dispatcher = resolveDispatcher();
+  // $FlowFixMe[not-a-function] This is unstable, thus optional
+  return dispatcher.useStore(store, selector);
 }
 
 export function useCacheRefresh(): <T>(?() => T, ?T) => void {

@@ -27,14 +27,15 @@ export {
   lazy,
   memo,
   cache,
+  cacheSignal,
   startTransition,
-  unstable_Activity,
-  unstable_postpone,
+  optimisticKey,
+  Activity,
   unstable_getCacheForType,
   unstable_SuspenseList,
-  unstable_ViewTransition,
+  ViewTransition,
   unstable_startGestureTransition,
-  unstable_addTransitionType,
+  addTransitionType,
   unstable_useCacheRefresh,
   useId,
   useCallback,
@@ -42,7 +43,7 @@ export {
   useDebugValue,
   useDeferredValue,
   useEffect,
-  experimental_useEffectEvent,
+  useEffectEvent,
   useImperativeHandle,
   useInsertionEffect,
   useLayoutEffect,
@@ -52,11 +53,13 @@ export {
   useRef,
   useState,
   useSyncExternalStore,
+  useStore,
   useTransition,
   useActionState,
   version,
   act, // DEV-only
   captureOwnerStack, // DEV-only
+  createStore,
 } from './src/ReactClient';
 
 import {useOptimistic} from './src/ReactClient';

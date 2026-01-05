@@ -68,6 +68,7 @@ function FiberRootNode(
   this.timeoutHandle = noTimeout;
   this.cancelPendingCommit = null;
   this.context = null;
+  this.storeTracker = null;
   this.pendingContext = null;
   this.next = null;
   this.callbackNode = null;
@@ -79,6 +80,9 @@ function FiberRootNode(
   this.pingedLanes = NoLanes;
   this.warmLanes = NoLanes;
   this.expiredLanes = NoLanes;
+  if (enableDefaultTransitionIndicator) {
+    this.indicatorLanes = NoLanes;
+  }
   this.errorRecoveryDisabledLanes = NoLanes;
   this.shellSuspendCounter = 0;
 
@@ -94,6 +98,7 @@ function FiberRootNode(
 
   if (enableDefaultTransitionIndicator) {
     this.onDefaultTransitionIndicator = onDefaultTransitionIndicator;
+    this.pendingIndicator = null;
   }
 
   this.pooledCache = null;
@@ -172,7 +177,7 @@ export function createFiberRoot(
     error: mixed,
     errorInfo: {
       +componentStack?: ?string,
-      +errorBoundary?: ?React$Component<any, any>,
+      +errorBoundary?: ?component(...props: any),
     },
   ) => void,
   onRecoverableError: (
