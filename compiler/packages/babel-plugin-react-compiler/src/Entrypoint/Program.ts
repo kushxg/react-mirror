@@ -10,9 +10,9 @@ import * as t from '@babel/types';
 import {
   CompilerError,
   CompilerErrorDetail,
-  ErrorSeverity,
+  ErrorCategory,
 } from '../CompilerError';
-import {ReactFunctionType} from '../HIR/Environment';
+import {ExternalFunction, ReactFunctionType} from '../HIR/Environment';
 import {CodegenFunction} from '../ReactiveScopes';
 import {isComponentDeclaration} from '../Utils/ComponentDeclaration';
 import {isHookDeclaration} from '../Utils/HookDeclaration';
@@ -23,7 +23,12 @@ import {
   ProgramContext,
   validateRestrictedImports,
 } from './Imports';
-import {CompilerReactTarget, PluginOptions} from './Options';
+import {
+  CompilerOutputMode,
+  CompilerReactTarget,
+  ParsedPluginOptions,
+  PluginOptions,
+} from './Options';
 import {compileFn} from './Pipeline';
 import {
   filterSuppressionsThatAffectFunction,
@@ -31,45 +36,120 @@ import {
   suppressionsToCompilerError,
 } from './Suppression';
 import {GeneratedSource} from '../HIR';
+import {Err, Ok, Result} from '../Utils/Result';
 
 export type CompilerPass = {
-  opts: PluginOptions;
+  opts: ParsedPluginOptions;
   filename: string | null;
   comments: Array<t.CommentBlock | t.CommentLine>;
   code: string | null;
 };
 export const OPT_IN_DIRECTIVES = new Set(['use forget', 'use memo']);
 export const OPT_OUT_DIRECTIVES = new Set(['use no forget', 'use no memo']);
+const DYNAMIC_GATING_DIRECTIVE = new RegExp('^use memo if\\(([^\\)]*)\\)$');
 
-export function findDirectiveEnablingMemoization(
+export function tryFindDirectiveEnablingMemoization(
   directives: Array<t.Directive>,
-): t.Directive | null {
-  return (
-    directives.find(directive =>
-      OPT_IN_DIRECTIVES.has(directive.value.value),
-    ) ?? null
+  opts: ParsedPluginOptions,
+): Result<t.Directive | null, CompilerError> {
+  const optIn = directives.find(directive =>
+    OPT_IN_DIRECTIVES.has(directive.value.value),
   );
+  if (optIn != null) {
+    return Ok(optIn);
+  }
+  const dynamicGating = findDirectivesDynamicGating(directives, opts);
+  if (dynamicGating.isOk()) {
+    return Ok(dynamicGating.unwrap()?.directive ?? null);
+  } else {
+    return Err(dynamicGating.unwrapErr());
+  }
 }
 
 export function findDirectiveDisablingMemoization(
   directives: Array<t.Directive>,
+  {customOptOutDirectives}: PluginOptions,
 ): t.Directive | null {
+  if (customOptOutDirectives != null) {
+    return (
+      directives.find(
+        directive =>
+          customOptOutDirectives.indexOf(directive.value.value) !== -1,
+      ) ?? null
+    );
+  }
   return (
     directives.find(directive =>
       OPT_OUT_DIRECTIVES.has(directive.value.value),
     ) ?? null
   );
 }
+function findDirectivesDynamicGating(
+  directives: Array<t.Directive>,
+  opts: ParsedPluginOptions,
+): Result<
+  {
+    gating: ExternalFunction;
+    directive: t.Directive;
+  } | null,
+  CompilerError
+> {
+  if (opts.dynamicGating === null) {
+    return Ok(null);
+  }
+  const errors = new CompilerError();
+  const result: Array<{directive: t.Directive; match: string}> = [];
 
-function isCriticalError(err: unknown): boolean {
-  return !(err instanceof CompilerError) || err.isCritical();
+  for (const directive of directives) {
+    const maybeMatch = DYNAMIC_GATING_DIRECTIVE.exec(directive.value.value);
+    if (maybeMatch != null && maybeMatch[1] != null) {
+      if (t.isValidIdentifier(maybeMatch[1])) {
+        result.push({directive, match: maybeMatch[1]});
+      } else {
+        errors.push({
+          reason: `Dynamic gating directive is not a valid JavaScript identifier`,
+          description: `Found '${directive.value.value}'`,
+          category: ErrorCategory.Gating,
+          loc: directive.loc ?? null,
+          suggestions: null,
+        });
+      }
+    }
+  }
+  if (errors.hasAnyErrors()) {
+    return Err(errors);
+  } else if (result.length > 1) {
+    const error = new CompilerError();
+    error.push({
+      reason: `Multiple dynamic gating directives found`,
+      description: `Expected a single directive but found [${result
+        .map(r => r.directive.value.value)
+        .join(', ')}]`,
+      category: ErrorCategory.Gating,
+      loc: result[0].directive.loc ?? null,
+      suggestions: null,
+    });
+    return Err(error);
+  } else if (result.length === 1) {
+    return Ok({
+      gating: {
+        source: opts.dynamicGating.source,
+        importSpecifierName: result[0].match,
+      },
+      directive: result[0].directive,
+    });
+  } else {
+    return Ok(null);
+  }
+}
+
+function isError(err: unknown): boolean {
+  return !(err instanceof CompilerError) || err.hasErrors();
 }
 
 function isConfigError(err: unknown): boolean {
   if (err instanceof CompilerError) {
-    return err.details.some(
-      detail => detail.severity === ErrorSeverity.InvalidConfig,
-    );
+    return err.details.some(detail => detail.category === ErrorCategory.Config);
   }
   return false;
 }
@@ -104,7 +184,7 @@ function logError(
         context.opts.logger.logEvent(context.filename, {
           kind: 'CompileError',
           fnLoc,
-          detail: detail.options,
+          detail,
         });
       }
     } else {
@@ -134,8 +214,7 @@ function handleError(
   logError(err, context, fnLoc);
   if (
     context.opts.panicThreshold === 'all_errors' ||
-    (context.opts.panicThreshold === 'critical_errors' &&
-      isCriticalError(err)) ||
+    (context.opts.panicThreshold === 'critical_errors' && isError(err)) ||
     isConfigError(err) // Always throws regardless of panic threshold
   ) {
     throw err;
@@ -236,7 +315,13 @@ function insertNewOutlinedFunctionNode(
       CompilerError.invariant(insertedFuncDecl.isFunctionDeclaration(), {
         reason: 'Expected inserted function declaration',
         description: `Got: ${insertedFuncDecl}`,
-        loc: insertedFuncDecl.node?.loc ?? null,
+        details: [
+          {
+            kind: 'error',
+            loc: insertedFuncDecl.node?.loc ?? null,
+            message: null,
+          },
+        ],
       });
       return insertedFuncDecl;
     }
@@ -315,7 +400,15 @@ export function compileProgram(
    */
   const suppressions = findProgramSuppressions(
     pass.comments,
-    pass.opts.eslintSuppressionRules ?? DEFAULT_ESLINT_SUPPRESSIONS,
+    /*
+     * If the compiler is validating hooks rules and exhaustive memo dependencies, we don't need to check
+     * for React ESLint suppressions
+     */
+    pass.opts.environment.validateExhaustiveMemoizationDependencies &&
+      pass.opts.environment.validateHooksUsage
+      ? null
+      : (pass.opts.eslintSuppressionRules ?? DEFAULT_ESLINT_SUPPRESSIONS),
+    // Always bail on Flow suppressions
     pass.opts.flowSuppressions,
   );
 
@@ -326,7 +419,8 @@ export function compileProgram(
     code: pass.code,
     suppressions,
     hasModuleScopeOptOut:
-      findDirectiveDisablingMemoization(program.node.directives) != null,
+      findDirectiveDisablingMemoization(program.node.directives, pass.opts) !=
+      null,
   });
 
   const queue: Array<CompileSource> = findFunctionsToCompile(
@@ -336,15 +430,30 @@ export function compileProgram(
   );
   const compiledFns: Array<CompileResult> = [];
 
+  // outputMode takes precedence if specified
+  const outputMode: CompilerOutputMode =
+    pass.opts.outputMode ?? (pass.opts.noEmit ? 'lint' : 'client');
   while (queue.length !== 0) {
     const current = queue.shift()!;
-    const compiled = processFn(current.fn, current.fnType, programContext);
+    const compiled = processFn(
+      current.fn,
+      current.fnType,
+      programContext,
+      outputMode,
+    );
 
     if (compiled != null) {
       for (const outlined of compiled.outlined) {
         CompilerError.invariant(outlined.fn.outlined.length === 0, {
           reason: 'Unexpected nested outlined functions',
-          loc: outlined.fn.loc,
+          description: null,
+          details: [
+            {
+              kind: 'error',
+              loc: outlined.fn.loc,
+              message: null,
+            },
+          ],
         });
         const fn = insertNewOutlinedFunctionNode(
           program,
@@ -377,7 +486,7 @@ export function compileProgram(
         new CompilerErrorDetail({
           reason:
             'Unexpected compiled functions when module scope opt-out is present',
-          severity: ErrorSeverity.Invariant,
+          category: ErrorCategory.Invariant,
           loc: null,
         }),
       );
@@ -412,7 +521,20 @@ function findFunctionsToCompile(
 ): Array<CompileSource> {
   const queue: Array<CompileSource> = [];
   const traverseFunction = (fn: BabelFn, pass: CompilerPass): void => {
+    // In 'all' mode, compile only top level functions
+    if (
+      pass.opts.compilationMode === 'all' &&
+      fn.scope.getProgramParent() !== fn.scope.parent
+    ) {
+      return;
+    }
+
     const fnType = getReactFunctionType(fn, pass);
+
+    if (pass.opts.environment.validateNoDynamicallyCreatedComponentsOrHooks) {
+      validateNoDynamicallyCreatedComponentsOrHooks(fn, pass, programContext);
+    }
+
     if (fnType === null || programContext.alreadyCompiled.has(fn.node)) {
       return;
     }
@@ -476,30 +598,63 @@ function processFn(
   fn: BabelFn,
   fnType: ReactFunctionType,
   programContext: ProgramContext,
+  outputMode: CompilerOutputMode,
 ): null | CodegenFunction {
-  let directives;
+  let directives: {
+    optIn: t.Directive | null;
+    optOut: t.Directive | null;
+  };
   if (fn.node.body.type !== 'BlockStatement') {
-    directives = {optIn: null, optOut: null};
-  } else {
     directives = {
-      optIn: findDirectiveEnablingMemoization(fn.node.body.directives),
-      optOut: findDirectiveDisablingMemoization(fn.node.body.directives),
+      optIn: null,
+      optOut: null,
+    };
+  } else {
+    const optIn = tryFindDirectiveEnablingMemoization(
+      fn.node.body.directives,
+      programContext.opts,
+    );
+    if (optIn.isErr()) {
+      /**
+       * If parsing opt-in directive fails, it's most likely that React Compiler
+       * was not tested or rolled out on this function. In that case, we handle
+       * the error and fall back to the safest option which is to not optimize
+       * the function.
+       */
+      handleError(optIn.unwrapErr(), programContext, fn.node.loc ?? null);
+      return null;
+    }
+    directives = {
+      optIn: optIn.unwrapOr(null),
+      optOut: findDirectiveDisablingMemoization(
+        fn.node.body.directives,
+        programContext.opts,
+      ),
     };
   }
 
   let compiledFn: CodegenFunction;
-  const compileResult = tryCompileFunction(fn, fnType, programContext);
+  const compileResult = tryCompileFunction(
+    fn,
+    fnType,
+    programContext,
+    outputMode,
+  );
   if (compileResult.kind === 'error') {
     if (directives.optOut != null) {
       logError(compileResult.error, programContext, fn.node.loc ?? null);
     } else {
       handleError(compileResult.error, programContext, fn.node.loc ?? null);
     }
-    const retryResult = retryCompileFunction(fn, fnType, programContext);
-    if (retryResult == null) {
+    if (outputMode === 'client') {
+      const retryResult = retryCompileFunction(fn, fnType, programContext);
+      if (retryResult == null) {
+        return null;
+      }
+      compiledFn = retryResult;
+    } else {
       return null;
     }
-    compiledFn = retryResult;
   } else {
     compiledFn = compileResult.compiledFn;
   }
@@ -535,7 +690,7 @@ function processFn(
 
   if (programContext.hasModuleScopeOptOut) {
     return null;
-  } else if (programContext.opts.noEmit) {
+  } else if (programContext.opts.outputMode === 'lint') {
     /**
      * inferEffectDependencies + noEmit is currently only used for linting. In
      * this mode, add source locations for where the compiler *can* infer effect
@@ -565,6 +720,7 @@ function tryCompileFunction(
   fn: BabelFn,
   fnType: ReactFunctionType,
   programContext: ProgramContext,
+  outputMode: CompilerOutputMode,
 ):
   | {kind: 'compile'; compiledFn: CodegenFunction}
   | {kind: 'error'; error: unknown} {
@@ -591,7 +747,7 @@ function tryCompileFunction(
         fn,
         programContext.opts.environment,
         fnType,
-        'all_features',
+        outputMode,
         programContext,
         programContext.opts.logger,
         programContext.filename,
@@ -629,7 +785,7 @@ function retryCompileFunction(
       fn,
       environment,
       fnType,
-      'no_inferred_memo',
+      'client-no-memo',
       programContext,
       programContext.opts.logger,
       programContext.filename,
@@ -659,25 +815,31 @@ function applyCompiledFunctions(
   pass: CompilerPass,
   programContext: ProgramContext,
 ): void {
-  const referencedBeforeDeclared =
-    pass.opts.gating != null
-      ? getFunctionReferencedBeforeDeclarationAtTopLevel(program, compiledFns)
-      : null;
+  let referencedBeforeDeclared = null;
   for (const result of compiledFns) {
     const {kind, originalFn, compiledFn} = result;
     const transformedFn = createNewFunctionNode(originalFn, compiledFn);
     programContext.alreadyCompiled.add(transformedFn);
 
-    if (referencedBeforeDeclared != null && kind === 'original') {
-      CompilerError.invariant(pass.opts.gating != null, {
-        reason: "Expected 'gating' import to be present",
-        loc: null,
-      });
+    let dynamicGating: ExternalFunction | null = null;
+    if (originalFn.node.body.type === 'BlockStatement') {
+      const result = findDirectivesDynamicGating(
+        originalFn.node.body.directives,
+        pass.opts,
+      );
+      if (result.isOk()) {
+        dynamicGating = result.unwrap()?.gating ?? null;
+      }
+    }
+    const functionGating = dynamicGating ?? pass.opts.gating;
+    if (kind === 'original' && functionGating != null) {
+      referencedBeforeDeclared ??=
+        getFunctionReferencedBeforeDeclarationAtTopLevel(program, compiledFns);
       insertGatedFunctionDeclaration(
         originalFn,
         transformedFn,
         programContext,
-        pass.opts.gating,
+        functionGating,
         referencedBeforeDeclared.has(result),
       );
     } else {
@@ -703,7 +865,7 @@ function shouldSkipCompilation(
           reason: `Expected a filename but found none.`,
           description:
             "When the 'sources' config options is specified, the React compiler will only compile files with a name",
-          severity: ErrorSeverity.InvalidConfig,
+          category: ErrorCategory.Config,
           loc: null,
         }),
       );
@@ -727,14 +889,85 @@ function shouldSkipCompilation(
   return false;
 }
 
+/**
+ * Validates that Components/Hooks are always defined at module level. This prevents scope reference
+ * errors that occur when the compiler attempts to optimize the nested component/hook while its
+ * parent function remains uncompiled.
+ */
+function validateNoDynamicallyCreatedComponentsOrHooks(
+  fn: BabelFn,
+  pass: CompilerPass,
+  programContext: ProgramContext,
+): void {
+  const parentNameExpr = getFunctionName(fn);
+  const parentName =
+    parentNameExpr !== null && parentNameExpr.isIdentifier()
+      ? parentNameExpr.node.name
+      : '<anonymous>';
+
+  const validateNestedFunction = (
+    nestedFn: NodePath<
+      t.FunctionDeclaration | t.FunctionExpression | t.ArrowFunctionExpression
+    >,
+  ): void => {
+    if (
+      nestedFn.node === fn.node ||
+      programContext.alreadyCompiled.has(nestedFn.node)
+    ) {
+      return;
+    }
+
+    if (nestedFn.scope.getProgramParent() !== nestedFn.scope.parent) {
+      const nestedFnType = getReactFunctionType(nestedFn as BabelFn, pass);
+      const nestedFnNameExpr = getFunctionName(nestedFn as BabelFn);
+      const nestedName =
+        nestedFnNameExpr !== null && nestedFnNameExpr.isIdentifier()
+          ? nestedFnNameExpr.node.name
+          : '<anonymous>';
+      if (nestedFnType === 'Component' || nestedFnType === 'Hook') {
+        CompilerError.throwDiagnostic({
+          category: ErrorCategory.Factories,
+          reason: `Components and hooks cannot be created dynamically`,
+          description: `The function \`${nestedName}\` appears to be a React ${nestedFnType.toLowerCase()}, but it's defined inside \`${parentName}\`. Components and Hooks should always be declared at module scope`,
+          details: [
+            {
+              kind: 'error',
+              message: 'this function dynamically created a component/hook',
+              loc: parentNameExpr?.node.loc ?? fn.node.loc ?? null,
+            },
+            {
+              kind: 'error',
+              message: 'the component is created here',
+              loc: nestedFnNameExpr?.node.loc ?? nestedFn.node.loc ?? null,
+            },
+          ],
+        });
+      }
+    }
+
+    nestedFn.skip();
+  };
+
+  fn.traverse({
+    FunctionDeclaration: validateNestedFunction,
+    FunctionExpression: validateNestedFunction,
+    ArrowFunctionExpression: validateNestedFunction,
+  });
+}
+
 function getReactFunctionType(
   fn: BabelFn,
   pass: CompilerPass,
 ): ReactFunctionType | null {
   const hookPattern = pass.opts.environment.hookPattern;
   if (fn.node.body.type === 'BlockStatement') {
-    if (findDirectiveEnablingMemoization(fn.node.body.directives) != null)
+    const optInDirectives = tryFindDirectiveEnablingMemoization(
+      fn.node.body.directives,
+      pass.opts,
+    );
+    if (optInDirectives.unwrapOr(null) != null) {
       return getComponentOrHookLike(fn, hookPattern) ?? 'Other';
+    }
   }
 
   // Component and hook declarations are known components/hooks
@@ -760,11 +993,6 @@ function getReactFunctionType(
       return componentSyntaxType;
     }
     case 'all': {
-      // Compile only top level functions
-      if (fn.scope.getProgramParent() !== fn.scope.parent) {
-        return null;
-      }
-
       return getComponentOrHookLike(fn, hookPattern) ?? 'Other';
     }
     default: {
@@ -1224,7 +1452,13 @@ export function getReactCompilerRuntimeModule(
       {
         reason: 'Expected target to already be validated',
         description: null,
-        loc: null,
+        details: [
+          {
+            kind: 'error',
+            loc: null,
+            message: null,
+          },
+        ],
         suggestions: null,
       },
     );
