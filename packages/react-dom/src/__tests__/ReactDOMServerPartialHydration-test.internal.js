@@ -113,7 +113,7 @@ describe('ReactDOMServerPartialHydration', () => {
     act = require('internal-test-utils').act;
     ReactDOMServer = require('react-dom/server');
     Scheduler = require('scheduler');
-    Activity = React.unstable_Activity;
+    Activity = React.Activity;
     Suspense = React.Suspense;
     useSyncExternalStore = React.useSyncExternalStore;
     if (gate(flags => flags.enableSuspenseList)) {
@@ -1922,7 +1922,7 @@ describe('ReactDOMServerPartialHydration', () => {
       assertConsoleErrorDev([
         "Can't perform a React state update on a component that hasn't mounted yet. " +
           'This indicates that you have a side-effect in your render function that ' +
-          'asynchronously later calls tries to update the component. Move this work to useEffect instead.\n' +
+          'asynchronously tries to update the component. Move this work to useEffect instead.\n' +
           '    in App (at **)',
       ]);
 
@@ -2362,7 +2362,7 @@ describe('ReactDOMServerPartialHydration', () => {
 
     function App({showMore}) {
       return (
-        <SuspenseList revealOrder="forwards">
+        <SuspenseList revealOrder="forwards" tail="visible">
           {a}
           {b}
           {showMore ? (
@@ -3913,7 +3913,6 @@ describe('ReactDOMServerPartialHydration', () => {
     );
   });
 
-  // @gate favorSafetyOverHydrationPerf
   it("falls back to client rendering when there's a text mismatch (direct text child)", async () => {
     function DirectTextChild({text}) {
       return <div>{text}</div>;
@@ -3937,7 +3936,6 @@ describe('ReactDOMServerPartialHydration', () => {
     ]);
   });
 
-  // @gate favorSafetyOverHydrationPerf
   it("falls back to client rendering when there's a text mismatch (text child with siblings)", async () => {
     function Sibling() {
       return 'Sibling';
@@ -4064,5 +4062,171 @@ describe('ReactDOMServerPartialHydration', () => {
     expect(span.textContent).toBe('World');
     expect(span.style.display).toBe('');
     expect(ref.current).toBe(span);
+  });
+
+  // Regression for https://github.com/facebook/react/issues/35210 and other issues where lazy elements created in flight
+  // caused hydration issues b/c the replay pathway did not correctly reset the hydration cursor
+  it('Can hydrate even when lazy content resumes immediately inside a HostComponent', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: 'value'});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return <label>{lazyContent}</label>;
+    }
+
+    // Server-rendered HTML
+    const container = document.createElement('div');
+    container.innerHTML = '<label>value</label>';
+
+    const hydrationErrors = [];
+
+    React.startTransition(() => {
+      ReactDOMClient.hydrateRoot(container, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    // Without the fix, hydration cursor is wrong and causes mismatch
+    expect(hydrationErrors).toEqual([]);
+    expect(container.innerHTML).toEqual('<label>value</label>');
+  });
+
+  it('Can hydrate even when lazy content resumes immediately inside a HostSingleton', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: <div>value</div>});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return (
+        <html>
+          <body>{lazyContent}</body>
+        </html>
+      );
+    }
+
+    // Server-rendered HTML
+    document.body.innerHTML = '<div>value</div>';
+
+    const hydrationErrors = [];
+
+    React.startTransition(() => {
+      ReactDOMClient.hydrateRoot(document, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    expect(hydrationErrors).toEqual([]);
+    expect(document.documentElement.outerHTML).toEqual(
+      '<html><head></head><body><div>value</div></body></html>',
+    );
+  });
+
+  it('Can hydrate even when lazy content resumes immediately inside a Suspense', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: 'value'});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return <Suspense>{lazyContent}</Suspense>;
+    }
+
+    // Server-rendered HTML
+    const container = document.createElement('div');
+    container.innerHTML = '<!--$-->value<!--/$-->';
+
+    const hydrationErrors = [];
+
+    let root;
+    React.startTransition(() => {
+      root = ReactDOMClient.hydrateRoot(container, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    expect(hydrationErrors).toEqual([]);
+    expect(container.innerHTML).toEqual('<!--$-->value<!--/$-->');
+    root.unmount();
+    expect(container.innerHTML).toEqual('<!--$--><!--/$-->');
+  });
+
+  it('Can hydrate even when lazy content resumes immediately inside an Activity', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: 'value'});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return <Activity mode="visible">{lazyContent}</Activity>;
+    }
+
+    // Server-rendered HTML
+    const container = document.createElement('div');
+    container.innerHTML = '<!--&-->value<!--/&-->';
+
+    const hydrationErrors = [];
+
+    let root;
+    React.startTransition(() => {
+      root = ReactDOMClient.hydrateRoot(container, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    expect(hydrationErrors).toEqual([]);
+    expect(container.innerHTML).toEqual('<!--&-->value<!--/&-->');
+    root.unmount();
+    expect(container.innerHTML).toEqual('<!--&--><!--/&-->');
   });
 });
