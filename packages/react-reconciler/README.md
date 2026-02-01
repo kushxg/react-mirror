@@ -59,7 +59,7 @@ The examples in the React repository are declared a bit differently than a third
 
 * [React ART](https://github.com/facebook/react/blob/main/packages/react-art/src/ReactART.js) and its [host config](https://github.com/facebook/react/blob/main/packages/react-art/src/ReactFiberConfigART.js)
 * [React DOM](https://github.com/facebook/react/blob/main/packages/react-dom/src/client/ReactDOM.js) and its [host config](https://github.com/facebook/react/blob/main/packages/react-dom-bindings/src/client/ReactFiberConfigDOM.js)
-* [React Native](https://github.com/facebook/react/blob/main/packages/react-native-renderer/src/ReactNativeRenderer.js) and its [host config](https://github.com/facebook/react/blob/main/packages/react-native-renderer/src/ReactFiberConfigNative.js)
+* [React Native](https://github.com/facebook/react/blob/main/packages/react-native-renderer/src/ReactFabric.js) and its [host config](https://github.com/facebook/react/blob/main/packages/react-native-renderer/src/ReactFiberConfigFabric.js)
 
 If these links break please file an issue and we’ll fix them. They intentionally link to the latest versions since the API is still evolving. If you have more questions please file an issue and we’ll try to help!
 
@@ -351,3 +351,21 @@ If you use the persistent mode instead of the mutation mode, you would still nee
 You can optionally implement hydration to "attach" to the existing tree during the initial render instead of creating it from scratch. For example, the DOM renderer uses this to attach to an HTML markup.
 
 To support hydration, you need to declare `supportsHydration: true` and then implement the methods in the "Hydration" section [listed in this file](https://github.com/facebook/react/blob/main/packages/react-reconciler/src/forks/ReactFiberConfig.custom.js). File an issue if you need help.
+
+
+### Removal of flushSync
+
+The flushSync export was previously available from react-reconciler but has been removed without a public deprecation period. Custom renderers relying on this API may encounter breaking changes.
+
+# Migration
+
+Custom renderers should migrate to the following APIs instead:
+
+- updateContainerSync — for synchronously updating a container
+- flushSyncWork — for flushing pending synchronous work
+
+These APIs provide more explicit control over synchronous rendering behavior and replace the previous flushSync usage.
+
+# Why this changed
+
+The reconciler internals were updated to better separate renderer responsibilities and reduce reliance on ambiguous synchronous entry points.
