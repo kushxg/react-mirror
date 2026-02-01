@@ -43,7 +43,7 @@ export function resolveClientReference<T>(
 
 export function resolveServerReference<T>(
   config: ServerManifest,
-  id: ServerReferenceId,
+  id: mixed,
 ): ClientReference<T> {
   throw new Error(
     'renderToHTML should not have emitted Server References. This is a bug in React.',
@@ -57,6 +57,12 @@ export function preloadModule<T>(
 }
 
 export function requireModule<T>(metadata: ClientReference<T>): T {
+  throw new Error(
+    'renderToHTML should not have emitted Client References. This is a bug in React.',
+  );
+}
+
+export function getModuleDebugInfo<T>(metadata: ClientReference<T>): null {
   throw new Error(
     'renderToHTML should not have emitted Client References. This is a bug in React.',
   );
