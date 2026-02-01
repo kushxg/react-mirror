@@ -12,8 +12,8 @@ import * as readline from 'readline';
 import ts from 'typescript';
 import yargs from 'yargs';
 import {hideBin} from 'yargs/helpers';
-import {FILTER_PATH, PROJECT_ROOT} from './constants';
-import {TestFilter, getFixtures, readTestFilter} from './fixture-utils';
+import {PROJECT_ROOT} from './constants';
+import {TestFilter, getFixtures} from './fixture-utils';
 import {TestResult, TestResults, report, update} from './reporter';
 import {
   RunnerAction,
@@ -33,8 +33,9 @@ type RunnerOptions = {
   sync: boolean;
   workerThreads: boolean;
   watch: boolean;
-  filter: boolean;
   update: boolean;
+  pattern?: string;
+  debug: boolean;
 };
 
 const opts: RunnerOptions = yargs
@@ -52,19 +53,25 @@ const opts: RunnerOptions = yargs
   .default('worker-threads', true)
   .boolean('watch')
   .describe('watch', 'Run compiler in watch mode, re-running after changes')
+  .alias('w', 'watch')
   .default('watch', false)
   .boolean('update')
+  .alias('u', 'update')
   .describe('update', 'Update fixtures')
   .default('update', false)
-  .boolean('filter')
+  .string('pattern')
+  .alias('p', 'pattern')
   .describe(
-    'filter',
-    'Only run fixtures which match the contents of testfilter.txt',
+    'pattern',
+    'Optional glob pattern to filter fixtures (e.g., "error.*", "use-memo")',
   )
-  .default('filter', false)
+  .boolean('debug')
+  .alias('d', 'debug')
+  .describe('debug', 'Enable debug logging to print HIR for each pass')
+  .default('debug', false)
   .help('help')
   .strict()
-  .parseSync(hideBin(process.argv));
+  .parseSync(hideBin(process.argv)) as RunnerOptions;
 
 /**
  * Do a test run and return the test results
@@ -73,12 +80,15 @@ async function runFixtures(
   worker: Worker & typeof runnerWorker,
   filter: TestFilter | null,
   compilerVersion: number,
+  debug: boolean,
+  requireSingleFixture: boolean,
 ): Promise<TestResults> {
   // We could in theory be fancy about tracking the contents of the fixtures
   // directory via our file subscription, but it's simpler to just re-read
   // the directory each time.
   const fixtures = await getFixtures(filter);
   const isOnlyFixture = filter !== null && fixtures.size === 1;
+  const shouldLog = debug && (!requireSingleFixture || isOnlyFixture);
 
   let entries: Array<[string, TestResult]>;
   if (!opts.sync) {
@@ -87,12 +97,7 @@ async function runFixtures(
     for (const [fixtureName, fixture] of fixtures) {
       work.push(
         worker
-          .transformFixture(
-            fixture,
-            compilerVersion,
-            (filter?.debug ?? false) && isOnlyFixture,
-            true,
-          )
+          .transformFixture(fixture, compilerVersion, shouldLog, true)
           .then(result => [fixtureName, result]),
       );
     }
@@ -104,7 +109,7 @@ async function runFixtures(
       let output = await runnerWorker.transformFixture(
         fixture,
         compilerVersion,
-        (filter?.debug ?? false) && isOnlyFixture,
+        shouldLog,
         true,
       );
       entries.push([fixtureName, output]);
@@ -119,7 +124,7 @@ async function onChange(
   worker: Worker & typeof runnerWorker,
   state: RunnerState,
 ) {
-  const {compilerVersion, isCompilerBuildValid, mode, filter} = state;
+  const {compilerVersion, isCompilerBuildValid, mode, filter, debug} = state;
   if (isCompilerBuildValid) {
     const start = performance.now();
 
@@ -133,8 +138,18 @@ async function onChange(
       worker,
       mode.filter ? filter : null,
       compilerVersion,
+      debug,
+      true, // requireSingleFixture in watch mode
     );
     const end = performance.now();
+
+    // Track fixture status for autocomplete suggestions
+    for (const [basename, result] of results) {
+      const failed =
+        result.actual !== result.expected || result.unexpectedError != null;
+      state.fixtureLastRunStatus.set(basename, failed ? 'fail' : 'pass');
+    }
+
     if (mode.action === RunnerAction.Update) {
       update(results);
       state.lastUpdate = end;
@@ -150,11 +165,13 @@ async function onChange(
   console.log(
     '\n' +
       (mode.filter
-        ? `Current mode = FILTER, filter test fixtures by "${FILTER_PATH}".`
+        ? `Current mode = FILTER, pattern = "${filter?.paths[0] ?? ''}".`
         : 'Current mode = NORMAL, run all test fixtures.') +
       '\nWaiting for input or file changes...\n' +
       'u     - update all fixtures\n' +
-      `f     - toggle (turn ${mode.filter ? 'off' : 'on'}) filter mode\n` +
+      `d     - toggle (turn ${debug ? 'off' : 'on'}) debug logging\n` +
+      'p     - enter pattern to filter fixtures\n' +
+      (mode.filter ? 'a     - run all tests (exit filter mode)\n' : '') +
       'q     - quit\n' +
       '[any] - rerun tests\n',
   );
@@ -171,9 +188,12 @@ export async function main(opts: RunnerOptions): Promise<void> {
   worker.getStderr().pipe(process.stderr);
   worker.getStdout().pipe(process.stdout);
 
-  if (opts.watch) {
-    makeWatchRunner(state => onChange(worker, state), opts.filter);
-    if (opts.filter) {
+  // Check if watch mode should be enabled
+  const shouldWatch = opts.watch;
+
+  if (shouldWatch) {
+    makeWatchRunner(state => onChange(worker, state), opts.debug, opts.pattern);
+    if (opts.pattern) {
       /**
        * Warm up wormers when in watch mode. Loading the Forget babel plugin
        * and all of its transitive dependencies takes 1-3s (per worker) on a M1.
@@ -216,8 +236,22 @@ export async function main(opts: RunnerOptions): Promise<void> {
             try {
               execSync('yarn build', {cwd: PROJECT_ROOT});
               console.log('Built compiler successfully with tsup');
-              const testFilter = opts.filter ? await readTestFilter() : null;
-              const results = await runFixtures(worker, testFilter, 0);
+
+              // Determine which filter to use
+              let testFilter: TestFilter | null = null;
+              if (opts.pattern) {
+                testFilter = {
+                  paths: [opts.pattern],
+                };
+              }
+
+              const results = await runFixtures(
+                worker,
+                testFilter,
+                0,
+                opts.debug,
+                false, // no requireSingleFixture in non-watch mode
+              );
               if (opts.update) {
                 update(results);
                 isSuccess = true;
