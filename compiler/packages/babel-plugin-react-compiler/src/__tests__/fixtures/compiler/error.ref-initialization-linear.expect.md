@@ -24,13 +24,27 @@ export const FIXTURE_ENTRYPOINT = {
 ## Error
 
 ```
+Found 1 error:
+
+Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
    6 |   if (r.current == null) {
    7 |     r.current = 42;
 >  8 |     r.current = 42;
-     |     ^^^^^^^^^ InvalidReact: Ref values (the `current` property) may not be accessed during render. (https://react.dev/reference/react/useRef) (8:8)
+     |     ^^^^^^^^^ Ref is initialized more than once during render
    9 |   }
   10 | }
   11 |
+
+   5 |   const r = useRef(null);
+   6 |   if (r.current == null) {
+>  7 |     r.current = 42;
+     |     ^^^^^^^^^ Ref was first initialized here
+   8 |     r.current = 42;
+   9 |   }
+  10 | }
 ```
           
       

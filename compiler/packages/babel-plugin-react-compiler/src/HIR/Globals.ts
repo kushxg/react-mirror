@@ -9,6 +9,7 @@ import {Effect, ValueKind, ValueReason} from './HIR';
 import {
   BUILTIN_SHAPES,
   BuiltInArrayId,
+  BuiltInAutodepsId,
   BuiltInFireFunctionId,
   BuiltInFireId,
   BuiltInMapId,
@@ -17,16 +18,19 @@ import {
   BuiltInSetId,
   BuiltInUseActionStateId,
   BuiltInUseContextHookId,
+  BuiltInUseEffectEventId,
   BuiltInUseEffectHookId,
   BuiltInUseInsertionEffectHookId,
   BuiltInUseLayoutEffectHookId,
   BuiltInUseOperatorId,
+  BuiltInUseOptimisticId,
   BuiltInUseReducerId,
   BuiltInUseRefId,
   BuiltInUseStateId,
   BuiltInUseTransitionId,
   BuiltInWeakMapId,
   BuiltInWeakSetId,
+  BuiltInEffectEventId,
   ReanimatedSharedValueId,
   ShapeRegistry,
   addFunction,
@@ -34,7 +38,7 @@ import {
   addObject,
 } from './ObjectShape';
 import {BuiltInType, ObjectType, PolyType} from './Types';
-import {TypeConfig} from './TypeSchema';
+import {AliasingSignatureConfig, TypeConfig} from './TypeSchema';
 import {assertExhaustive} from '../Utils/utils';
 import {isHookName} from './Environment';
 import {CompilerError, SourceLocation} from '..';
@@ -109,6 +113,99 @@ const TYPED_GLOBALS: Array<[string, BuiltInType]> = [
           returnType: {kind: 'Object', shapeId: BuiltInObjectId},
           calleeEffect: Effect.Read,
           returnValueKind: ValueKind.Mutable,
+        }),
+      ],
+      [
+        'entries',
+        addFunction(DEFAULT_SHAPES, [], {
+          positionalParams: [Effect.Capture],
+          restParam: null,
+          returnType: {kind: 'Object', shapeId: BuiltInArrayId},
+          calleeEffect: Effect.Read,
+          returnValueKind: ValueKind.Mutable,
+          aliasing: {
+            receiver: '@receiver',
+            params: ['@object'],
+            rest: null,
+            returns: '@returns',
+            temporaries: [],
+            effects: [
+              {
+                kind: 'Create',
+                into: '@returns',
+                reason: ValueReason.KnownReturnSignature,
+                value: ValueKind.Mutable,
+              },
+              // Object values are captured into the return
+              {
+                kind: 'Capture',
+                from: '@object',
+                into: '@returns',
+              },
+            ],
+          },
+        }),
+      ],
+      [
+        'keys',
+        addFunction(DEFAULT_SHAPES, [], {
+          positionalParams: [Effect.Read],
+          restParam: null,
+          returnType: {kind: 'Object', shapeId: BuiltInArrayId},
+          calleeEffect: Effect.Read,
+          returnValueKind: ValueKind.Mutable,
+          aliasing: {
+            receiver: '@receiver',
+            params: ['@object'],
+            rest: null,
+            returns: '@returns',
+            temporaries: [],
+            effects: [
+              {
+                kind: 'Create',
+                into: '@returns',
+                reason: ValueReason.KnownReturnSignature,
+                value: ValueKind.Mutable,
+              },
+              // Only keys are captured, and keys are immutable
+              {
+                kind: 'ImmutableCapture',
+                from: '@object',
+                into: '@returns',
+              },
+            ],
+          },
+        }),
+      ],
+      [
+        'values',
+        addFunction(DEFAULT_SHAPES, [], {
+          positionalParams: [Effect.Capture],
+          restParam: null,
+          returnType: {kind: 'Object', shapeId: BuiltInArrayId},
+          calleeEffect: Effect.Read,
+          returnValueKind: ValueKind.Mutable,
+          aliasing: {
+            receiver: '@receiver',
+            params: ['@object'],
+            rest: null,
+            returns: '@returns',
+            temporaries: [],
+            effects: [
+              {
+                kind: 'Create',
+                into: '@returns',
+                reason: ValueReason.KnownReturnSignature,
+                value: ValueKind.Mutable,
+              },
+              // Object values are captured into the return
+              {
+                kind: 'Capture',
+                from: '@object',
+                into: '@returns',
+              },
+            ],
+          },
         }),
       ],
     ]),
@@ -529,11 +626,136 @@ const TYPED_GLOBALS: Array<[string, BuiltInType]> = [
   // TODO: rest of Global objects
 ];
 
+const createRenderHookAliasing: (
+  reason: ValueReason,
+) => AliasingSignatureConfig = reason => ({
+  receiver: '@receiver',
+  params: [],
+  rest: '@rest',
+  returns: '@returns',
+  temporaries: [],
+  effects: [
+    // Freeze the arguments
+    {
+      kind: 'Freeze',
+      value: '@rest',
+      reason: ValueReason.HookCaptured,
+    },
+    // Render the arguments
+    {
+      kind: 'Render',
+      place: '@rest',
+    },
+    // Returns a frozen value
+    {
+      kind: 'Create',
+      into: '@returns',
+      value: ValueKind.Frozen,
+      reason,
+    },
+    // May alias any arguments into the return
+    {
+      kind: 'Alias',
+      from: '@rest',
+      into: '@returns',
+    },
+  ],
+});
+
+const EffectHookAliasing: AliasingSignatureConfig = {
+  receiver: '@receiver',
+  params: ['@fn', '@deps'],
+  rest: '@rest',
+  returns: '@returns',
+  temporaries: ['@effect'],
+  effects: [
+    // Freezes the function and deps
+    {
+      kind: 'Freeze',
+      value: '@rest',
+      reason: ValueReason.Effect,
+    },
+    {
+      kind: 'Freeze',
+      value: '@fn',
+      reason: ValueReason.Effect,
+    },
+    {
+      kind: 'Freeze',
+      value: '@deps',
+      reason: ValueReason.Effect,
+    },
+    // Deps are accessed during render
+    {
+      kind: 'Render',
+      place: '@deps',
+    },
+    // Internally creates an effect object that captures the function and deps
+    {
+      kind: 'Create',
+      into: '@effect',
+      value: ValueKind.Frozen,
+      reason: ValueReason.KnownReturnSignature,
+    },
+    // The effect stores the function and dependencies
+    {
+      kind: 'Capture',
+      from: '@rest',
+      into: '@effect',
+    },
+    {
+      kind: 'Capture',
+      from: '@fn',
+      into: '@effect',
+    },
+    // Returns undefined
+    {
+      kind: 'Create',
+      into: '@returns',
+      value: ValueKind.Primitive,
+      reason: ValueReason.KnownReturnSignature,
+    },
+  ],
+};
+
 /*
  * TODO(mofeiZ): We currently only store rest param effects for hooks.
  * now that FeatureFlag `enableTreatHooksAsFunctions` is removed we can
  * use positional params too (?)
  */
+const useEffectEvent = addHook(
+  DEFAULT_SHAPES,
+  {
+    positionalParams: [],
+    restParam: Effect.Freeze,
+    returnType: {
+      kind: 'Function',
+      return: {kind: 'Poly'},
+      shapeId: BuiltInEffectEventId,
+      isConstructor: false,
+    },
+    calleeEffect: Effect.Read,
+    hookKind: 'useEffectEvent',
+    // Frozen because it should not mutate any locally-bound values
+    returnValueKind: ValueKind.Frozen,
+    aliasing: {
+      receiver: '@receiver',
+      params: ['@value'],
+      rest: null,
+      returns: '@return',
+      temporaries: [],
+      effects: [
+        {
+          kind: 'Freeze',
+          value: '@value',
+          reason: ValueReason.HookCaptured,
+        },
+        {kind: 'Assign', from: '@value', into: '@return'},
+      ],
+    },
+  },
+  BuiltInUseEffectEventId,
+);
 const REACT_APIS: Array<[string, BuiltInType]> = [
   [
     'useContext',
@@ -547,6 +769,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
         hookKind: 'useContext',
         returnValueKind: ValueKind.Frozen,
         returnValueReason: ValueReason.Context,
+        aliasing: createRenderHookAliasing(ValueReason.Context),
       },
       BuiltInUseContextHookId,
     ),
@@ -561,6 +784,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
       hookKind: 'useState',
       returnValueKind: ValueKind.Frozen,
       returnValueReason: ValueReason.State,
+      aliasing: createRenderHookAliasing(ValueReason.State),
     }),
   ],
   [
@@ -573,6 +797,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
       hookKind: 'useActionState',
       returnValueKind: ValueKind.Frozen,
       returnValueReason: ValueReason.State,
+      aliasing: createRenderHookAliasing(ValueReason.HookCaptured),
     }),
   ],
   [
@@ -585,6 +810,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
       hookKind: 'useReducer',
       returnValueKind: ValueKind.Frozen,
       returnValueReason: ValueReason.ReducerState,
+      aliasing: createRenderHookAliasing(ValueReason.ReducerState),
     }),
   ],
   [
@@ -596,6 +822,22 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
       calleeEffect: Effect.Read,
       hookKind: 'useRef',
       returnValueKind: ValueKind.Mutable,
+      aliasing: {
+        receiver: '@receiver',
+        params: [],
+        rest: '@rest',
+        returns: '@return',
+        temporaries: [],
+        effects: [
+          {
+            kind: 'Create',
+            into: '@return',
+            value: ValueKind.Mutable,
+            reason: ValueReason.KnownReturnSignature,
+          },
+          {kind: 'Capture', from: '@rest', into: '@return'},
+        ],
+      },
     }),
   ],
   [
@@ -618,6 +860,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
       calleeEffect: Effect.Read,
       hookKind: 'useMemo',
       returnValueKind: ValueKind.Frozen,
+      aliasing: createRenderHookAliasing(ValueReason.HookCaptured),
     }),
   ],
   [
@@ -625,10 +868,16 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
     addHook(DEFAULT_SHAPES, {
       positionalParams: [],
       restParam: Effect.Freeze,
-      returnType: {kind: 'Poly'},
+      returnType: {
+        kind: 'Function',
+        isConstructor: false,
+        return: {kind: 'Poly'},
+        shapeId: null,
+      },
       calleeEffect: Effect.Read,
       hookKind: 'useCallback',
       returnValueKind: ValueKind.Frozen,
+      aliasing: createRenderHookAliasing(ValueReason.HookCaptured),
     }),
   ],
   [
@@ -642,6 +891,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
         calleeEffect: Effect.Read,
         hookKind: 'useEffect',
         returnValueKind: ValueKind.Frozen,
+        aliasing: EffectHookAliasing,
       },
       BuiltInUseEffectHookId,
     ),
@@ -657,6 +907,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
         calleeEffect: Effect.Read,
         hookKind: 'useLayoutEffect',
         returnValueKind: ValueKind.Frozen,
+        aliasing: EffectHookAliasing,
       },
       BuiltInUseLayoutEffectHookId,
     ),
@@ -672,6 +923,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
         calleeEffect: Effect.Read,
         hookKind: 'useInsertionEffect',
         returnValueKind: ValueKind.Frozen,
+        aliasing: EffectHookAliasing,
       },
       BuiltInUseInsertionEffectHookId,
     ),
@@ -685,6 +937,20 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
       calleeEffect: Effect.Read,
       hookKind: 'useTransition',
       returnValueKind: ValueKind.Frozen,
+      aliasing: createRenderHookAliasing(ValueReason.HookCaptured),
+    }),
+  ],
+  [
+    'useOptimistic',
+    addHook(DEFAULT_SHAPES, {
+      positionalParams: [],
+      restParam: Effect.Freeze,
+      returnType: {kind: 'Object', shapeId: BuiltInUseOptimisticId},
+      calleeEffect: Effect.Read,
+      hookKind: 'useOptimistic',
+      returnValueKind: ValueKind.Frozen,
+      returnValueReason: ValueReason.State,
+      aliasing: createRenderHookAliasing(ValueReason.HookCaptured),
     }),
   ],
   [
@@ -698,6 +964,7 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
         returnType: {kind: 'Poly'},
         calleeEffect: Effect.Read,
         returnValueKind: ValueKind.Frozen,
+        aliasing: createRenderHookAliasing(ValueReason.HookCaptured),
       },
       BuiltInUseOperatorId,
     ),
@@ -722,6 +989,9 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
       BuiltInFireId,
     ),
   ],
+  ['useEffectEvent', useEffectEvent],
+  ['experimental_useEffectEvent', useEffectEvent],
+  ['AUTODEPS', addObject(DEFAULT_SHAPES, BuiltInAutodepsId, [])],
 ];
 
 TYPED_GLOBALS.push(
@@ -847,6 +1117,8 @@ export function installTypeConfig(
         noAlias: typeConfig.noAlias === true,
         mutableOnlyIfOperandsAreMutable:
           typeConfig.mutableOnlyIfOperandsAreMutable === true,
+        aliasing: typeConfig.aliasing,
+        knownIncompatible: typeConfig.knownIncompatible ?? null,
       });
     }
     case 'hook': {
@@ -864,6 +1136,8 @@ export function installTypeConfig(
         ),
         returnValueKind: typeConfig.returnValueKind ?? ValueKind.Frozen,
         noAlias: typeConfig.noAlias === true,
+        aliasing: typeConfig.aliasing,
+        knownIncompatible: typeConfig.knownIncompatible ?? null,
       });
     }
     case 'object': {

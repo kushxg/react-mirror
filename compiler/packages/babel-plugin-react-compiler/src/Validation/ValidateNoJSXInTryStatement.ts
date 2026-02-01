@@ -5,7 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import {CompilerError, ErrorSeverity} from '..';
+import {CompilerDiagnostic, CompilerError} from '..';
+import {ErrorCategory} from '../CompilerError';
 import {BlockId, HIRFunction} from '../HIR';
 import {Result} from '../Utils/Result';
 import {retainWhere} from '../Utils/utils';
@@ -26,27 +27,40 @@ export function validateNoJSXInTryStatement(
   const activeTryBlocks: Array<BlockId> = [];
   const errors = new CompilerError();
   for (const [, block] of fn.body.blocks) {
-    retainWhere(activeTryBlocks, id => id !== block.id);
-
-    if (activeTryBlocks.length !== 0) {
+    // Check for JSX BEFORE removing the current block from activeTryBlocks
+    if (activeTryBlocks.includes(block.id)) {
       for (const instr of block.instructions) {
         const {value} = instr;
         switch (value.kind) {
           case 'JsxExpression':
           case 'JsxFragment': {
-            errors.push({
-              severity: ErrorSeverity.InvalidReact,
-              reason: `Unexpected JSX element within a try statement. To catch errors in rendering a given component, wrap that component in an error boundary. (https://react.dev/reference/react/Component#catching-rendering-errors-with-an-error-boundary)`,
-              loc: value.loc,
-            });
+            errors.pushDiagnostic(
+              CompilerDiagnostic.create({
+                category: ErrorCategory.ErrorBoundaries,
+                reason: 'Avoid constructing JSX within try/catch',
+                description: `React does not immediately render components when JSX is rendered, so any errors from this component will not be caught by the try/catch. To catch errors in rendering a given component, wrap that component in an error boundary. (https://react.dev/reference/react/Component#catching-rendering-errors-with-an-error-boundary)`,
+              }).withDetails({
+                kind: 'error',
+                loc: value.loc,
+                message: 'Avoid constructing JSX within try/catch',
+              }),
+            );
             break;
           }
         }
       }
     }
 
+    // Remove the current block from activeTryBlocks after checking
+    retainWhere(activeTryBlocks, id => id !== block.id);
+
     if (block.terminal.kind === 'try') {
-      activeTryBlocks.push(block.terminal.handler);
+      // Add the try block itself to activeTryBlocks
+      activeTryBlocks.push(block.terminal.block);
+      // Also add handler if present
+      if (block.terminal.handler !== null) {
+        activeTryBlocks.push(block.terminal.handler);
+      }
     }
   }
   return errors.asResult();

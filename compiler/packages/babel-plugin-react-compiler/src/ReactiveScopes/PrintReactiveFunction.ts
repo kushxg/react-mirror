@@ -323,7 +323,13 @@ function writeTerminal(writer: Writer, terminal: ReactiveTerminal): void {
             CompilerError.invariant(block != null, {
               reason: 'Expected case to have a block',
               description: null,
-              loc: case_.test?.loc ?? null,
+              details: [
+                {
+                  kind: 'error',
+                  loc: case_.test?.loc ?? null,
+                  message: null,
+                },
+              ],
               suggestions: null,
             });
             writeReactiveInstructions(writer, block);
@@ -389,14 +395,24 @@ function writeTerminal(writer: Writer, terminal: ReactiveTerminal): void {
     case 'try': {
       writer.writeLine(`[${terminal.id}] try {`);
       writeReactiveInstructions(writer, terminal.block);
-      writer.write(`} catch `);
-      if (terminal.handlerBinding !== null) {
-        writer.writeLine(`(${printPlace(terminal.handlerBinding)}) {`);
-      } else {
-        writer.writeLine(`{`);
+      if (terminal.handler !== null) {
+        writer.write(`} catch `);
+        if (terminal.handlerBinding !== null) {
+          writer.writeLine(`(${printPlace(terminal.handlerBinding)}) {`);
+        } else {
+          writer.writeLine(`{`);
+        }
+        writeReactiveInstructions(writer, terminal.handler);
+        writer.writeLine('}');
       }
-      writeReactiveInstructions(writer, terminal.handler);
-      writer.writeLine('}');
+      if (terminal.finalizer !== null) {
+        writer.writeLine(`} finally {`);
+        writeReactiveInstructions(writer, terminal.finalizer);
+        writer.writeLine('}');
+      }
+      if (terminal.handler === null && terminal.finalizer === null) {
+        writer.writeLine('}');
+      }
       break;
     }
     default:
