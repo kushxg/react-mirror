@@ -10,7 +10,7 @@ import invariant from 'invariant';
 import {runBabelPluginReactCompiler} from '../Babel/RunReactCompilerBabelPlugin';
 import type {Logger, LoggerEvent} from '../Entrypoint';
 
-it('logs succesful compilation', () => {
+it('logs successful compilation', () => {
   const logs: [string | null, LoggerEvent][] = [];
   const logger: Logger = {
     logEvent(filename, event) {
@@ -56,9 +56,10 @@ it('logs failed compilation', () => {
   expect(event.kind).toEqual('CompileError');
   invariant(event.kind === 'CompileError', 'typescript be smarter');
 
-  expect(event.detail.severity).toEqual('InvalidReact');
+  expect(event.detail.severity).toEqual('Error');
   //@ts-ignore
-  const {start, end, identifierName} = event.detail.loc as t.SourceLocation;
+  const {start, end, identifierName} =
+    event.detail.primaryLocation() as t.SourceLocation;
   expect(start).toEqual({column: 28, index: 28, line: 1});
   expect(end).toEqual({column: 33, index: 33, line: 1});
   expect(identifierName).toEqual('props');
