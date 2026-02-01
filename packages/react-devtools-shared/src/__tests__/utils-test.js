@@ -12,65 +12,68 @@ import {
   getDisplayNameForReactElement,
   isPlainObject,
 } from 'react-devtools-shared/src/utils';
-import {stackToComponentSources} from 'react-devtools-shared/src/devtools/utils';
+import { stackToComponentLocations } from 'react-devtools-shared/src/devtools/utils';
 import {
   formatConsoleArguments,
   formatConsoleArgumentsToSingleString,
   formatWithStyles,
   gt,
   gte,
-  parseSourceFromComponentStack,
 } from 'react-devtools-shared/src/backend/utils';
+import { extractLocationFromComponentStack } from 'react-devtools-shared/src/backend/utils/parseStackTrace';
 import {
   REACT_SUSPENSE_LIST_TYPE as SuspenseList,
   REACT_STRICT_MODE_TYPE as StrictMode,
 } from 'shared/ReactSymbols';
-import {createElement} from 'react';
-import {symbolicateSource} from '../symbolicateSource';
+import { createElement } from 'react';
+import { symbolicateSource } from '../symbolicateSource';
 
 describe('utils', () => {
   describe('getDisplayName', () => {
     // @reactVersion >= 16.0
     it('should return a function name', () => {
-      function FauxComponent() {}
+      function FauxComponent() { }
       expect(getDisplayName(FauxComponent)).toEqual('FauxComponent');
     });
 
     // @reactVersion >= 16.0
     it('should return a displayName name if specified', () => {
-      function FauxComponent() {}
+      function FauxComponent() { }
       FauxComponent.displayName = 'OverrideDisplayName';
       expect(getDisplayName(FauxComponent)).toEqual('OverrideDisplayName');
     });
 
     // @reactVersion >= 16.0
     it('should return the fallback for anonymous functions', () => {
-      expect(getDisplayName(() => {}, 'Fallback')).toEqual('Fallback');
+      expect(getDisplayName(() => { }, 'Fallback')).toEqual('Fallback');
     });
 
     // @reactVersion >= 16.0
     it('should return Anonymous for anonymous functions without a fallback', () => {
-      expect(getDisplayName(() => {})).toEqual('Anonymous');
+      expect(getDisplayName(() => { })).toEqual('Anonymous');
     });
 
     // Simulate a reported bug:
     // https://github.com/facebook/react/issues/16685
     // @reactVersion >= 16.0
     it('should return a fallback when the name prop is not a string', () => {
-      const FauxComponent = {name: {}};
+      const FauxComponent = { name: {} };
       expect(getDisplayName(FauxComponent, 'Fallback')).toEqual('Fallback');
     });
 
     it('should parse a component stack trace', () => {
       expect(
-        stackToComponentSources(`
+        stackToComponentLocations(`
     at Foobar (http://localhost:3000/static/js/bundle.js:103:74)
     at a
     at header
     at div
     at App`),
       ).toEqual([
-        ['Foobar', ['http://localhost:3000/static/js/bundle.js', 103, 74]],
+        [
+          'Foobar',
+          ['Foobar', 'http://localhost:3000/static/js/bundle.js', 103, 74],
+        ],
         ['a', null],
         ['header', null],
         ['div', null],
@@ -82,7 +85,7 @@ describe('utils', () => {
   describe('getDisplayNameForReactElement', () => {
     // @reactVersion >= 16.0
     it('should return correct display name for an element with function type', () => {
-      function FauxComponent() {}
+      function FauxComponent() { }
       FauxComponent.displayName = 'OverrideDisplayName';
       const element = createElement(FauxComponent);
       expect(getDisplayNameForReactElement(element)).toEqual(
@@ -210,7 +213,7 @@ describe('utils', () => {
       const symbol = Symbol('a');
       expect(
         formatWithStyles(
-          ['abc', 123, 12.3, true, {hello: 'world'}, symbol],
+          ['abc', 123, 12.3, true, { hello: 'world' }, symbol],
           'color: gray',
         ),
       ).toEqual([
@@ -220,7 +223,7 @@ describe('utils', () => {
         123,
         12.3,
         true,
-        {hello: 'world'},
+        { hello: 'world' },
         symbol,
       ]);
     });
@@ -240,22 +243,22 @@ describe('utils', () => {
     });
 
     it('should format non string inputs as the first argument', () => {
-      expect(formatWithStyles([{foo: 'bar'}])).toEqual([{foo: 'bar'}]);
+      expect(formatWithStyles([{ foo: 'bar' }])).toEqual([{ foo: 'bar' }]);
       expect(formatWithStyles([[1, 2, 3]])).toEqual([[1, 2, 3]]);
-      expect(formatWithStyles([{foo: 'bar'}], 'color: gray')).toEqual([
+      expect(formatWithStyles([{ foo: 'bar' }], 'color: gray')).toEqual([
         '%c%o',
         'color: gray',
-        {foo: 'bar'},
+        { foo: 'bar' },
       ]);
       expect(formatWithStyles([[1, 2, 3]], 'color: gray')).toEqual([
         '%c%o',
         'color: gray',
         [1, 2, 3],
       ]);
-      expect(formatWithStyles([{foo: 'bar'}, 'hi'], 'color: gray')).toEqual([
+      expect(formatWithStyles([{ foo: 'bar' }, 'hi'], 'color: gray')).toEqual([
         '%c%o %s',
         'color: gray',
-        {foo: 'bar'},
+        { foo: 'bar' },
         'hi',
       ]);
     });
@@ -280,12 +283,12 @@ describe('utils', () => {
   describe('isPlainObject', () => {
     it('should return true for plain objects', () => {
       expect(isPlainObject({})).toBe(true);
-      expect(isPlainObject({a: 1})).toBe(true);
-      expect(isPlainObject({a: {b: {c: 123}}})).toBe(true);
+      expect(isPlainObject({ a: 1 })).toBe(true);
+      expect(isPlainObject({ a: { b: { c: 123 } } })).toBe(true);
     });
 
     it('should return false if object is a class instance', () => {
-      expect(isPlainObject(new (class C {})())).toBe(false);
+      expect(isPlainObject(new (class C { })())).toBe(false);
     });
 
     it('should return false for objects, which have not only Object in its prototype chain', () => {
@@ -303,92 +306,104 @@ describe('utils', () => {
     });
   });
 
-  describe('parseSourceFromComponentStack', () => {
+  describe('extractLocationFromComponentStack', () => {
     it('should return null if passed empty string', () => {
-      expect(parseSourceFromComponentStack('')).toEqual(null);
+      expect(extractLocationFromComponentStack('')).toEqual(null);
     });
 
     it('should construct the source from the first frame if available', () => {
       expect(
-        parseSourceFromComponentStack(
+        extractLocationFromComponentStack(
           'at l (https://react.dev/_next/static/chunks/main-78a3b4c2aa4e4850.js:1:10389)\n' +
-            'at f (https://react.dev/_next/static/chunks/pages/%5B%5B...markdownPath%5D%5D-af2ed613aedf1d57.js:1:8519)\n' +
-            'at r (https://react.dev/_next/static/chunks/pages/_app-dd0b77ea7bd5b246.js:1:498)\n',
+          'at f (https://react.dev/_next/static/chunks/pages/%5B%5B...markdownPath%5D%5D-af2ed613aedf1d57.js:1:8519)\n' +
+          'at r (https://react.dev/_next/static/chunks/pages/_app-dd0b77ea7bd5b246.js:1:498)\n',
         ),
-      ).toEqual({
-        sourceURL:
-          'https://react.dev/_next/static/chunks/main-78a3b4c2aa4e4850.js',
-        line: 1,
-        column: 10389,
-      });
+      ).toEqual([
+        'l',
+        'https://react.dev/_next/static/chunks/main-78a3b4c2aa4e4850.js',
+        1,
+        10389,
+      ]);
     });
 
     it('should construct the source from highest available frame', () => {
       expect(
-        parseSourceFromComponentStack(
+        extractLocationFromComponentStack(
           '    at Q\n' +
-            '    at a\n' +
-            '    at m (https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js:5:9236)\n' +
-            '    at div\n' +
-            '    at div\n' +
-            '    at div\n' +
-            '    at nav\n' +
-            '    at div\n' +
-            '    at te (https://react.dev/_next/static/chunks/363-3c5f1b553b6be118.js:1:158857)\n' +
-            '    at tt (https://react.dev/_next/static/chunks/363-3c5f1b553b6be118.js:1:165520)\n' +
-            '    at f (https://react.dev/_next/static/chunks/pages/%5B%5B...markdownPath%5D%5D-af2ed613aedf1d57.js:1:8519)',
+          '    at a\n' +
+          '    at m (https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js:5:9236)\n' +
+          '    at div\n' +
+          '    at div\n' +
+          '    at div\n' +
+          '    at nav\n' +
+          '    at div\n' +
+          '    at te (https://react.dev/_next/static/chunks/363-3c5f1b553b6be118.js:1:158857)\n' +
+          '    at tt (https://react.dev/_next/static/chunks/363-3c5f1b553b6be118.js:1:165520)\n' +
+          '    at f (https://react.dev/_next/static/chunks/pages/%5B%5B...markdownPath%5D%5D-af2ed613aedf1d57.js:1:8519)',
         ),
-      ).toEqual({
-        sourceURL:
-          'https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js',
-        line: 5,
-        column: 9236,
-      });
+      ).toEqual([
+        'm',
+        'https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js',
+        5,
+        9236,
+      ]);
     });
 
     it('should construct the source from frame, which has only url specified', () => {
       expect(
-        parseSourceFromComponentStack(
+        extractLocationFromComponentStack(
           '    at Q\n' +
-            '    at a\n' +
-            '    at https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js:5:9236\n',
+          '    at a\n' +
+          '    at https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js:5:9236\n',
         ),
-      ).toEqual({
-        sourceURL:
-          'https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js',
-        line: 5,
-        column: 9236,
-      });
+      ).toEqual([
+        '',
+        'https://react.dev/_next/static/chunks/848-122f91e9565d9ffa.js',
+        5,
+        9236,
+      ]);
     });
 
     it('should parse sourceURL correctly if it includes parentheses', () => {
       expect(
-        parseSourceFromComponentStack(
+        extractLocationFromComponentStack(
           'at HotReload (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/react-dev-overlay/hot-reloader-client.js:307:11)\n' +
-            '    at Router (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/app-router.js:181:11)\n' +
-            '    at ErrorBoundaryHandler (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/error-boundary.js:114:9)',
+          '    at Router (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/app-router.js:181:11)\n' +
+          '    at ErrorBoundaryHandler (webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/error-boundary.js:114:9)',
         ),
-      ).toEqual({
-        sourceURL:
-          'webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/react-dev-overlay/hot-reloader-client.js',
-        line: 307,
-        column: 11,
-      });
+      ).toEqual([
+        'HotReload',
+        'webpack-internal:///(app-pages-browser)/./node_modules/next/dist/client/components/react-dev-overlay/hot-reloader-client.js',
+        307,
+        11,
+      ]);
     });
 
     it('should support Firefox stack', () => {
       expect(
-        parseSourceFromComponentStack(
+        extractLocationFromComponentStack(
           'tt@https://react.dev/_next/static/chunks/363-3c5f1b553b6be118.js:1:165558\n' +
-            'f@https://react.dev/_next/static/chunks/pages/%5B%5B...markdownPath%5D%5D-af2ed613aedf1d57.js:1:8535\n' +
-            'r@https://react.dev/_next/static/chunks/pages/_app-dd0b77ea7bd5b246.js:1:513',
+          'f@https://react.dev/_next/static/chunks/pages/%5B%5B...markdownPath%5D%5D-af2ed613aedf1d57.js:1:8535\n' +
+          'r@https://react.dev/_next/static/chunks/pages/_app-dd0b77ea7bd5b246.js:1:513',
         ),
-      ).toEqual({
-        sourceURL:
-          'https://react.dev/_next/static/chunks/363-3c5f1b553b6be118.js',
-        line: 1,
-        column: 165558,
-      });
+      ).toEqual([
+        'tt',
+        'https://react.dev/_next/static/chunks/363-3c5f1b553b6be118.js',
+        1,
+        165558,
+      ]);
+    });
+
+    // Regression test for #35490
+    it('should not hang on malicious input', () => {
+      const maliciousInput = ' ' + ('"\0').repeat(2000) + '\r!\r!';
+
+      const startTime = Date.now();
+      const result = extractLocationFromComponentStack(maliciousInput);
+      const duration = Date.now() - startTime;
+
+      expect(duration).toBeLessThan(100);
+      expect(result).toEqual(null);
     });
   });
 
@@ -399,9 +414,8 @@ exports.f = f;
 function f() { }
 //# sourceMappingURL=`;
     const result = {
-      column: 16,
-      line: 1,
-      sourceURL: 'http://test/a.mts',
+      location: ['', 'http://test/a.mts', 1, 17],
+      ignored: false,
     };
     const fs = {
       'http://test/a.mts': `export function f() {}`,
@@ -418,6 +432,26 @@ function f() { }
       await expect(run('http://test/b.mjs')).resolves.toStrictEqual(result);
       await expect(run('http://test/c.mjs')).resolves.toStrictEqual(result);
       await expect(run('http://test/d.mjs')).resolves.toStrictEqual(result);
+    });
+
+    it('should not throw for invalid base URL with relative source map', async () => {
+      const fs2 = {
+        'bundle.js': `${source}bundle.js.map`,
+      };
+      const fetch2 = async url => fs2[url] || null;
+      const run = url => symbolicateSource(fetch2, url, 1, 1);
+      await expect(run('bundle.js')).resolves.toBe(null);
+    });
+
+    it('should resolve absolute source map even if base URL is invalid', async () => {
+      const fs3 = {
+        'invalid-base.js': `${source}http://test/a.mjs.map`,
+        'http://test/a.mts': `export function f() {}`,
+        'http://test/a.mjs.map': `{"version":3,"file":"a.mjs","sourceRoot":"","sources":["a.mts"],"names":[],"mappings":";;AAAA,cAAsB;AAAtB,SAAgB,CAAC,KAAI,CAAC"}`,
+      };
+      const fetch3 = async url => fs3[url] || null;
+      const run = url => symbolicateSource(fetch3, url, 4, 10);
+      await expect(run('invalid-base.js')).resolves.toStrictEqual(result);
     });
   });
 
