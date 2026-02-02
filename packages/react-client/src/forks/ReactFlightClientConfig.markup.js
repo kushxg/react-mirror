@@ -18,7 +18,7 @@ export * from 'react-client/src/ReactClientConsoleConfigPlain';
 export type ModuleLoading = null;
 export type ServerConsumerModuleMap = null;
 export opaque type ServerManifest = null;
-export opaque type ServerReferenceId = string;
+export type ServerReferenceId = string;
 export opaque type ClientReferenceMetadata = null;
 export opaque type ClientReference<T> = null; // eslint-disable-line no-unused-vars
 
@@ -57,6 +57,12 @@ export function preloadModule<T>(
 }
 
 export function requireModule<T>(metadata: ClientReference<T>): T {
+  throw new Error(
+    'renderToHTML should not have emitted Client References. This is a bug in React.',
+  );
+}
+
+export function getModuleDebugInfo<T>(metadata: ClientReference<T>): null {
   throw new Error(
     'renderToHTML should not have emitted Client References. This is a bug in React.',
   );

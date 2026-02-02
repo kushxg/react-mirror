@@ -9,6 +9,7 @@ import {CompilerError} from '../CompilerError';
 import {
   BasicBlock,
   BlockId,
+  GeneratedSource,
   GotoVariant,
   HIR,
   InstructionId,
@@ -44,6 +45,7 @@ export function buildReactiveFunction(fn: HIRFunction): ReactiveFunction {
   return {
     loc: fn.loc,
     id: fn.id,
+    nameHint: fn.nameHint,
     params: fn.params,
     generator: fn.generator,
     async: fn.async,
@@ -69,9 +71,7 @@ class Driver {
   visitBlock(block: BasicBlock, blockValue: ReactiveBlock): void {
     CompilerError.invariant(!this.cx.emitted.has(block.id), {
       reason: `Cannot emit the same block twice: bb${block.id}`,
-      description: null,
-      loc: null,
-      suggestions: null,
+      loc: GeneratedSource,
     });
     this.cx.emitted.add(block.id);
     for (const instruction of block.instructions) {
@@ -836,9 +836,7 @@ class Driver {
       case 'unsupported': {
         CompilerError.invariant(false, {
           reason: 'Unexpected unsupported terminal',
-          description: null,
           loc: terminal.loc,
-          suggestions: null,
         });
       }
       default: {
@@ -873,9 +871,7 @@ class Driver {
           {
             reason:
               'Expected branch block to end in an instruction that sets the test value',
-            description: null,
             loc: instr.lvalue.loc,
-            suggestions: null,
           },
         );
         return {
@@ -905,9 +901,7 @@ class Driver {
       if (instructions.length === 0) {
         CompilerError.invariant(false, {
           reason: 'Expected goto value block to have at least one instruction',
-          description: null,
-          loc: null,
-          suggestions: null,
+          loc: GeneratedSource,
         });
       } else if (defaultBlock.instructions.length === 1) {
         const instr = defaultBlock.instructions[0]!;
@@ -1190,9 +1184,7 @@ class Driver {
     if (target === null) {
       CompilerError.invariant(false, {
         reason: 'Expected a break target',
-        description: null,
-        loc: null,
-        suggestions: null,
+        loc: GeneratedSource,
       });
     }
     if (this.cx.scopeFallthroughs.has(target.block)) {
@@ -1223,9 +1215,7 @@ class Driver {
     const target = this.cx.getContinueTarget(block);
     CompilerError.invariant(target !== null, {
       reason: `Expected continue target to be scheduled for bb${block}`,
-      description: null,
-      loc: null,
-      suggestions: null,
+      loc: GeneratedSource,
     });
 
     return {
@@ -1298,9 +1288,7 @@ class Context {
     const id = this.#nextScheduleId++;
     CompilerError.invariant(!this.#scheduled.has(block), {
       reason: `Break block is already scheduled: bb${block}`,
-      description: null,
-      loc: null,
-      suggestions: null,
+      loc: GeneratedSource,
     });
     this.#scheduled.add(block);
     this.#controlFlowStack.push({block, id, type});
@@ -1317,9 +1305,7 @@ class Context {
     this.#scheduled.add(fallthroughBlock);
     CompilerError.invariant(!this.#scheduled.has(continueBlock), {
       reason: `Continue block is already scheduled: bb${continueBlock}`,
-      description: null,
-      loc: null,
-      suggestions: null,
+      loc: GeneratedSource,
     });
     this.#scheduled.add(continueBlock);
     let ownsLoop = false;
@@ -1345,9 +1331,7 @@ class Context {
     const last = this.#controlFlowStack.pop();
     CompilerError.invariant(last !== undefined && last.id === scheduleId, {
       reason: 'Can only unschedule the last target',
-      description: null,
-      loc: null,
-      suggestions: null,
+      loc: GeneratedSource,
     });
     if (last.type !== 'loop' || last.ownsBlock !== null) {
       this.#scheduled.delete(last.block);
@@ -1420,9 +1404,7 @@ class Context {
 
     CompilerError.invariant(false, {
       reason: 'Expected a break target',
-      description: null,
-      loc: null,
-      suggestions: null,
+      loc: GeneratedSource,
     });
   }
 
