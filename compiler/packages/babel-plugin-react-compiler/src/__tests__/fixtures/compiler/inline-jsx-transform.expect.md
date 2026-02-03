@@ -390,6 +390,7 @@ function ConditionalJsx(t0) {
     t1 = $[0];
   }
   let content = t1;
+
   if (shouldWrap) {
     const t2 = content;
     let t3;
@@ -411,6 +412,7 @@ function ConditionalJsx(t0) {
     }
     content = t3;
   }
+
   return content;
 }
 
