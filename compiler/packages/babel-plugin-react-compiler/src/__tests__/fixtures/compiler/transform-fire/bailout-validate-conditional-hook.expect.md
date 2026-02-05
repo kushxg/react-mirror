@@ -39,12 +39,14 @@ import { Stringify } from "shared-runtime";
  */
 function Component(props) {
   const foo = _temp;
+
   if (props.cond) {
     const t0 = useFire(foo);
     useEffect(() => {
       t0(props);
     });
   }
+
   return <Stringify />;
 }
 function _temp(props_0) {
