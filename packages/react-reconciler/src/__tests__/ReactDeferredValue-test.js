@@ -34,7 +34,7 @@ describe('ReactDeferredValue', () => {
     useMemo = React.useMemo;
     useState = React.useState;
     Suspense = React.Suspense;
-    Activity = React.unstable_Activity;
+    Activity = React.Activity;
 
     const InternalTestUtils = require('internal-test-utils');
     assertLog = InternalTestUtils.assertLog;
@@ -608,6 +608,48 @@ describe('ReactDeferredValue', () => {
     },
   );
 
+  it(
+    "regression: useDeferredValue's initial value argument works even if an unrelated " +
+      'transition is suspended',
+    async () => {
+      // Simulates a previous bug where a new useDeferredValue hook is mounted
+      // while some unrelated transition is suspended. In the regression case,
+      // the initial values was skipped/ignored.
+
+      function Content({text}) {
+        return (
+          <AsyncText text={useDeferredValue(text, `Preview ${text}...`)} />
+        );
+      }
+
+      function App({text}) {
+        // Use a key to force a new Content instance to be mounted each time
+        // the text changes.
+        return <Content key={text} text={text} />;
+      }
+
+      const root = ReactNoop.createRoot();
+
+      // Render a previous UI using useDeferredValue. Suspend on the
+      // final value.
+      resolveText('Preview A...');
+      await act(() => startTransition(() => root.render(<App text="A" />)));
+      assertLog(['Preview A...', 'Suspend! [A]']);
+
+      // While it's still suspended, update the UI to show a different screen
+      // with a different preview value. We should be able to show the new
+      // preview even though the previous transition never finished.
+      resolveText('Preview B...');
+      await act(() => startTransition(() => root.render(<App text="B" />)));
+      assertLog(['Preview B...', 'Suspend! [B]']);
+
+      // Now finish loading the final value.
+      await act(() => resolveText('B'));
+      assertLog(['B']);
+      expect(root).toMatchRenderedOutput('B');
+    },
+  );
+
   it('avoids a useDeferredValue waterfall when separated by a Suspense boundary', async () => {
     // Same as the previous test but with a Suspense boundary separating the
     // two useDeferredValue hooks.
@@ -654,7 +696,6 @@ describe('ReactDeferredValue', () => {
     expect(root).toMatchRenderedOutput('Content');
   });
 
-  // @gate enableActivity
   it('useDeferredValue can spawn a deferred task while prerendering a hidden tree', async () => {
     function App() {
       const text = useDeferredValue('Final', 'Preview');
@@ -700,7 +741,6 @@ describe('ReactDeferredValue', () => {
     expect(root).toMatchRenderedOutput(<div>Final</div>);
   });
 
-  // @gate enableActivity
   it('useDeferredValue can prerender the initial value inside a hidden tree', async () => {
     function App({text}) {
       const renderedText = useDeferredValue(text, `Preview [${text}]`);
@@ -763,7 +803,6 @@ describe('ReactDeferredValue', () => {
     expect(root).toMatchRenderedOutput(<div>B</div>);
   });
 
-  // @gate enableActivity
   it(
     'useDeferredValue skips the preview state when revealing a hidden tree ' +
       'if the final value is referentially identical',
@@ -803,7 +842,6 @@ describe('ReactDeferredValue', () => {
     },
   );
 
-  // @gate enableActivity
   it(
     'useDeferredValue does not skip the preview state when revealing a ' +
       'hidden tree if the final value is different from the currently rendered one',
@@ -848,7 +886,6 @@ describe('ReactDeferredValue', () => {
     },
   );
 
-  // @gate enableActivity
   it(
     'useDeferredValue does not show "previous" value when revealing a hidden ' +
       'tree (no initial value)',
