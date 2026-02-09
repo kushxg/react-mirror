@@ -37,7 +37,7 @@ The high level process of creating releases is [documented below](#process). Ind
 If your code lands in the main branch, it will be automatically published to the prerelease channels within the next weekday. However, if you want to immediately publish a prerelease, you can trigger the job to run immediately via the GitHub UI:
 
 1. Wait for the commit you want to release to finish its [(Runtime) Build and Test workflow](https://github.com/facebook/react/actions/workflows/runtime_build_and_test.yml), as the prerelease script needs to download the build from that workflow.
-2. Copy the git sha of whichever commit you are trying to release
+2. Copy the full git sha of whichever commit you are trying to release
 3. Go to https://github.com/facebook/react/actions/workflows/runtime_prereleases_manual.yml
 4. Paste the git sha into the "Run workflow" dropdown
 5. Let the job finish and it will be released on npm
@@ -45,7 +45,7 @@ If your code lands in the main branch, it will be automatically published to the
 This will grab the specified revision on the main branch and publish it to the Next and Experimental channels.
 ## Publishing Without Tags
 
-The sections below include meaningful `--tags` in the instructions. However, keep in mind that **the `--tags` arguments is optional**, and you can omit it if you don't want to tag the release on npm at all. This can be useful when preparing breaking changes.
+The sections below include meaningful `--tags` in the instructions. However, keep in mind that **the `--tags` argument is optional**, and you can omit it if you don't want to tag the release on npm at all. This can be useful when preparing breaking changes.
 
 ## Publishing Next
 
