@@ -302,11 +302,11 @@ function reorderBlock(
         node.reorderability === Reorderability.Reorderable,
         {
           reason: `Expected all remaining instructions to be reorderable`,
-          loc: node.instruction?.loc ?? block.terminal.loc,
           description:
             node.instruction != null
               ? `Instruction [${node.instruction.id}] was not emitted yet but is not reorderable`
               : `Lvalue $${id} was not emitted yet but is not reorderable`,
+          loc: node.instruction?.loc ?? block.terminal.loc,
         },
       );
 
