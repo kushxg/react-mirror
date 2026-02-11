@@ -11,11 +11,16 @@ import {
   __DEBUG__,
   TREE_OPERATION_ADD,
   TREE_OPERATION_REMOVE,
-  TREE_OPERATION_REMOVE_ROOT,
   TREE_OPERATION_REORDER_CHILDREN,
   TREE_OPERATION_SET_SUBTREE_MODE,
   TREE_OPERATION_UPDATE_TREE_BASE_DURATION,
   TREE_OPERATION_UPDATE_ERRORS_OR_WARNINGS,
+  TREE_OPERATION_APPLIED_ACTIVITY_SLICE_CHANGE,
+  SUSPENSE_TREE_OPERATION_ADD,
+  SUSPENSE_TREE_OPERATION_REMOVE,
+  SUSPENSE_TREE_OPERATION_REORDER_CHILDREN,
+  SUSPENSE_TREE_OPERATION_RESIZE,
+  SUSPENSE_TREE_OPERATION_SUSPENDERS,
 } from 'react-devtools-shared/src/constants';
 import {
   parseElementDisplayNameFromBackend,
@@ -154,11 +159,14 @@ function updateTree(
 
   // Clone nodes before mutating them so edits don't affect them.
   const getClonedNode = (id: number): CommitTreeNode => {
-    // $FlowFixMe[prop-missing] - recommended fix is to use object spread operator
-    const clonedNode = ((Object.assign(
-      {},
-      nodes.get(id),
-    ): any): CommitTreeNode);
+    const existingNode = nodes.get(id);
+    if (existingNode == null) {
+      throw new Error(
+        `Could not clone the node: commit tree does not contain fiber "${id}". This is a bug in React DevTools.`,
+      );
+    }
+
+    const clonedNode = {...existingNode};
     nodes.set(id, clonedNode);
     return clonedNode;
   };
@@ -194,9 +202,11 @@ function updateTree(
         i += 3;
 
         if (nodes.has(id)) {
-          throw new Error(
-            `Commit tree already contains fiber "${id}". This is a bug in React DevTools.`,
+          // Duplicate add detected; log and skip instead of throwing to avoid crashing the UI.
+          console.error(
+            `Commit tree already contains fiber "${id}". Skipping duplicate add.`,
           );
+          break;
         }
 
         if (type === ElementTypeRoot) {
@@ -234,6 +244,9 @@ function updateTree(
 
           const keyStringID = operations[i];
           const key = stringTable[keyStringID];
+          i++;
+
+          // skip name prop
           i++;
 
           if (__DEBUG__) {
@@ -275,9 +288,11 @@ function updateTree(
           i++;
 
           if (!nodes.has(id)) {
-            throw new Error(
-              `Commit tree does not contain fiber "${id}". This is a bug in React DevTools.`,
+            // Missing node; log and skip this remove operation.
+            console.error(
+              `Commit tree does not contain fiber "${id}". Skipping remove.`,
             );
+            continue;
           }
 
           const node = getClonedNode(id);
@@ -301,9 +316,13 @@ function updateTree(
         }
         break;
       }
-      case TREE_OPERATION_REMOVE_ROOT: {
-        throw Error('Operation REMOVE_ROOT is not supported while profiling.');
-      }
+
+    case TREE_OPERATION_REMOVE_ROOT: {
+    console.warn('Operation REMOVE_ROOT is not supported while profiling. Ignoring.');
+    break;
+}
+
+
       case TREE_OPERATION_REORDER_CHILDREN: {
         id = ((operations[i + 1]: any): number);
         const numChildren = ((operations[i + 2]: any): number);
@@ -366,8 +385,126 @@ function updateTree(
         break;
       }
 
+      case SUSPENSE_TREE_OPERATION_ADD: {
+        const fiberID = operations[i + 1];
+        const parentID = operations[i + 2];
+        const nameStringID = operations[i + 3];
+        const isSuspended = operations[i + 4];
+        const numRects = operations[i + 5];
+        const name = stringTable[nameStringID];
+
+        if (__DEBUG__) {
+          let rects: string;
+          if (numRects === -1) {
+            rects = 'null';
+          } else {
+            rects =
+              '[' +
+              operations.slice(i + 6, i + 6 + numRects * 4).join(',') +
+              ']';
+          }
+          debug(
+            'Add suspense',
+            `node ${fiberID} (name=${JSON.stringify(name)}, rects={${rects}}) under ${parentID} suspended ${isSuspended}`,
+          );
+        }
+
+        i += 6 + (numRects === -1 ? 0 : numRects * 4);
+        break;
+      }
+
+      case SUSPENSE_TREE_OPERATION_REMOVE: {
+        const removeLength = ((operations[i + 1]: any): number);
+        i += 2 + removeLength;
+
+        break;
+      }
+
+      case SUSPENSE_TREE_OPERATION_REORDER_CHILDREN: {
+        const suspenseID = ((operations[i + 1]: any): number);
+        const numChildren = ((operations[i + 2]: any): number);
+        const children = ((operations.slice(
+          i + 3,
+          i + 3 + numChildren,
+        ): any): Array<number>);
+
+        i = i + 3 + numChildren;
+
+        if (__DEBUG__) {
+          debug(
+            'Suspense re-order',
+            `suspense ${suspenseID} children ${children.join(',')}`,
+          );
+        }
+
+        break;
+      }
+
+      case SUSPENSE_TREE_OPERATION_RESIZE: {
+        const suspenseID = ((operations[i + 1]: any): number);
+        const numRects = ((operations[i + 2]: any): number);
+
+        if (__DEBUG__) {
+          if (numRects === -1) {
+            debug('Suspense resize', `suspense ${suspenseID} rects null`);
+          } else {
+            const rects = ((operations.slice(
+              i + 3,
+              i + 3 + numRects * 4,
+            ): any): Array<number>);
+            debug(
+              'Suspense resize',
+              `suspense ${suspenseID} rects [${rects.join(',')}]`,
+            );
+          }
+        }
+
+        i += 3 + (numRects === -1 ? 0 : numRects * 4);
+
+        break;
+      }
+
+      case SUSPENSE_TREE_OPERATION_SUSPENDERS: {
+        i++;
+        const changeLength = ((operations[i++]: any): number);
+
+        for (let changeIndex = 0; changeIndex < changeLength; changeIndex++) {
+          const suspenseNodeId = operations[i++];
+          const hasUniqueSuspenders = operations[i++] === 1;
+          const endTime = operations[i++] / 1000;
+          const isSuspended = operations[i++] === 1;
+          const environmentNamesLength = operations[i++];
+          i += environmentNamesLength;
+          if (__DEBUG__) {
+            debug(
+              'Suspender changes',
+              `Suspense node ${suspenseNodeId} unique suspenders set to ${String(hasUniqueSuspenders)} ending at ${String(endTime)} is suspended set to ${String(isSuspended)} with ${String(environmentNamesLength)} environments`,
+            );
+          }
+        }
+
+        break;
+      }
+
+      case TREE_OPERATION_APPLIED_ACTIVITY_SLICE_CHANGE: {
+        i++;
+        const activitySliceIDChange = operations[i++];
+        if (__DEBUG__) {
+          debug(
+            'Applied activity slice change',
+            activitySliceIDChange === 0
+              ? 'Reset applied activity slice'
+              : `Changed to activity slice ID ${activitySliceIDChange}`,
+          );
+        }
+        break;
+      }
+
       default:
-        throw Error(`Unsupported Bridge operation "${operation}"`);
+        // Unsupported operation; log and stop processing further operations to avoid unpredictable state.
+        console.error(`Unsupported Bridge operation "${operation}". Ignoring remaining operations.`);
+        i = operations.length;
+        break;
     }
   }
 
