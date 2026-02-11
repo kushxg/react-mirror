@@ -12,7 +12,7 @@ import type {
   TouchedViewDataAtPoint,
   ViewConfig,
 } from './ReactNativeTypes';
-import {create, diff} from './ReactNativeAttributePayloadFabric';
+import type {TransitionTypes} from 'react/src/ReactTransitionType';
 import {dispatchEvent} from './ReactFabricEventEmitter';
 import {
   NoEventPriority,
@@ -25,7 +25,7 @@ import {
 import type {Fiber} from 'react-reconciler/src/ReactInternalTypes';
 import {HostText} from 'react-reconciler/src/ReactWorkTags';
 import {
-  getInstanceFromHostFiber,
+  getFragmentParentHostFiber,
   traverseFragmentInstance,
 } from 'react-reconciler/src/ReactFiberTreeReflection';
 
@@ -35,10 +35,13 @@ import {
   deepFreezeAndThrowOnMutationInDev,
   createPublicInstance,
   createPublicTextInstance,
+  createAttributePayload,
+  diffAttributePayloads,
   type PublicInstance as ReactNativePublicInstance,
   type PublicTextInstance,
   type PublicRootInstance,
 } from 'react-native/Libraries/ReactPrivate/ReactNativePrivateInterface';
+import {enableFragmentRefsInstanceHandles} from 'shared/ReactFeatureFlags';
 
 const {
   createNode,
@@ -55,9 +58,15 @@ const {
   unstable_ContinuousEventPriority: FabricContinuousPriority,
   unstable_IdleEventPriority: FabricIdlePriority,
   unstable_getCurrentEventPriority: fabricGetCurrentEventPriority,
+  measureInstance: fabricMeasureInstance,
+  applyViewTransitionName: fabricApplyViewTransitionName,
+  startViewTransition: fabricStartViewTransition,
+  restoreViewTransitionName: fabricRestoreViewTransitionName,
+  cancelViewTransitionName: fabricCancelViewTransitionName,
 } = nativeFabricUIManager;
 
 import {getClosestInstanceFromNode} from './ReactFabricComponentTree';
+import {compareDocumentPositionForEmptyFragment} from 'shared/ReactDOMFragmentRefShared';
 
 import {
   getInspectorDataForViewTag,
@@ -65,10 +74,7 @@ import {
   getInspectorDataForInstance,
 } from './ReactNativeFiberInspector';
 
-import {
-  passChildrenWhenCloningPersistedNodes,
-  enableLazyPublicInstanceInFabric,
-} from 'shared/ReactFeatureFlags';
+import {passChildrenWhenCloningPersistedNodes} from 'shared/ReactFeatureFlags';
 import {REACT_CONTEXT_TYPE} from 'shared/ReactSymbols';
 import type {ReactContext} from 'shared/ReactTypes';
 
@@ -89,7 +95,7 @@ const {get: getViewConfigForType} = ReactNativeViewConfigRegistry;
 let nextReactTag = 2;
 
 type InternalInstanceHandle = Object;
-type Node = Object;
+
 export type Type = string;
 export type Props = Object;
 export type Instance = {
@@ -120,6 +126,9 @@ export type TextInstance = {
 };
 export type HydratableInstance = Instance | TextInstance;
 export type PublicInstance = ReactNativePublicInstance;
+type PublicInstanceWithFragmentHandles = PublicInstance & {
+  unstable_reactFragments?: Set<FragmentInstanceType>,
+};
 export type Container = {
   containerTag: number,
   publicInstance: PublicRootInstance | null,
@@ -154,12 +163,267 @@ if (registerEventHandler) {
   registerEventHandler(dispatchEvent);
 }
 
-export * from 'react-reconciler/src/ReactFiberConfigWithNoMutation';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoHydration';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoScopes';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoTestSelectors';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoResources';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoSingletons';
+
+// -------------------
+//    ViewTransition
+// -------------------
+
+function shim(...args: any): empty {
+  throw new Error(
+    'The current renderer does not support mutation. ' +
+      'This error is likely caused by a bug in React. ' +
+      'Please file an issue.',
+  );
+}
+
+export const supportsMutation = false;
+
+export const cloneMutableInstance = shim;
+export const cloneMutableTextInstance = shim;
+export const appendChild = shim;
+export const appendChildToContainer = shim;
+export const commitTextUpdate = shim;
+
+export function commitMount(
+  instance: Instance,
+  type: string,
+  newProps: Props,
+  internalInstanceHandle: Object,
+): void {}
+
+export const commitUpdate = shim;
+export const insertBefore = shim;
+export const insertInContainerBefore = shim;
+export const removeChild = shim;
+export const removeChildFromContainer = shim;
+export const resetTextContent = shim;
+export const hideInstance = shim;
+export const hideTextInstance = shim;
+export const unhideInstance = shim;
+export const unhideTextInstance = shim;
+export const clearContainer = shim;
+
+export type InstanceMeasurement = {
+  rect: {x: number, y: number, width: number, height: number},
+  abs: boolean,
+  clip: boolean,
+  view: boolean,
+};
+
+export type RunningViewTransition = null;
+
+export type ViewTransitionInstance = null | {
+  name: string,
+  ...
+};
+
+export type GestureTimeline = any;
+
+export function restoreViewTransitionName(
+  instance: Instance,
+  props: Props,
+): void {
+  fabricRestoreViewTransitionName(instance.node);
+}
+
+// Cancel the old and new snapshots of viewTransitionName
+export function cancelViewTransitionName(
+  instance: Instance,
+  oldName: string,
+  props: Props,
+): void {
+  fabricCancelViewTransitionName(instance.node, oldName);
+}
+
+export function cancelRootViewTransitionName(rootContainer: Container): void {
+  if (__DEV__) {
+    console.warn('cancelRootViewTransitionName is not implemented');
+  }
+}
+
+export function restoreRootViewTransitionName(rootContainer: Container): void {
+  if (__DEV__) {
+    console.warn('restoreRootViewTransitionName is not implemented');
+  }
+}
+
+export function cloneRootViewTransitionContainer(
+  rootContainer: Container,
+): Instance {
+  if (__DEV__) {
+    console.warn('cloneRootViewTransitionContainer is not implemented');
+  }
+  // $FlowFixMe[incompatible-return] Return empty stub
+  return null;
+}
+
+export function removeRootViewTransitionClone(
+  rootContainer: Container,
+  clone: Instance,
+): void {
+  if (__DEV__) {
+    console.warn('removeRootViewTransitionClone is not implemented');
+  }
+}
+
+export function measureInstance(instance: Instance): InstanceMeasurement {
+  const measurement = fabricMeasureInstance(instance.node);
+  return {
+    rect: {
+      x: measurement.x,
+      y: measurement.y,
+      width: measurement.width,
+      height: measurement.height,
+    },
+    abs: false,
+    clip: false,
+    view: true,
+  };
+}
+
+export function measureClonedInstance(instance: Instance): InstanceMeasurement {
+  if (__DEV__) {
+    console.warn('measureClonedInstance is not implemented');
+  }
+  return {
+    rect: {x: 0, y: 0, width: 0, height: 0},
+    abs: false,
+    clip: false,
+    view: true,
+  };
+}
+
+export function wasInstanceInViewport(
+  measurement: InstanceMeasurement,
+): boolean {
+  return measurement.view;
+}
+
+export function hasInstanceChanged(
+  oldMeasurement: InstanceMeasurement,
+  newMeasurement: InstanceMeasurement,
+): boolean {
+  if (__DEV__) {
+    console.warn('hasInstanceChanged is not implemented');
+  }
+  return false;
+}
+
+export function hasInstanceAffectedParent(
+  oldMeasurement: InstanceMeasurement,
+  newMeasurement: InstanceMeasurement,
+): boolean {
+  if (__DEV__) {
+    console.warn('hasInstanceAffectedParent is not implemented');
+  }
+  return false;
+}
+
+export function startGestureTransition(
+  suspendedState: null | SuspendedState,
+  rootContainer: Container,
+  timeline: GestureTimeline,
+  rangeStart: number,
+  rangeEnd: number,
+  transitionTypes: null | TransitionTypes,
+  mutationCallback: () => void,
+  animateCallback: () => void,
+  errorCallback: (error: mixed) => void,
+  finishedAnimation: () => void,
+): RunningViewTransition {
+  if (__DEV__) {
+    console.warn('startGestureTransition is not implemented');
+  }
+  return null;
+}
+
+export function stopViewTransition(transition: RunningViewTransition): void {
+  if (__DEV__) {
+    console.warn('stopViewTransition is not implemented');
+  }
+}
+
+export function addViewTransitionFinishedListener(
+  transition: RunningViewTransition,
+  callback: () => void,
+): void {
+  callback();
+}
+
+export function createViewTransitionInstance(
+  name: string,
+): ViewTransitionInstance {
+  return {name};
+}
+
+export function getCurrentGestureOffset(timeline: GestureTimeline): number {
+  if (__DEV__) {
+    console.warn('getCurrentGestureOffset is not implemented');
+  }
+  return 0;
+}
+
+export function applyViewTransitionName(
+  instance: Instance,
+  name: string,
+  className: ?string,
+): void {
+  // add view-transition-name to things that might animate for browser
+  fabricApplyViewTransitionName(instance.node, name, className);
+}
+
+export function startViewTransition(
+  suspendedState: null | SuspendedState,
+  rootContainer: Container,
+  transitionTypes: null | TransitionTypes,
+  mutationCallback: () => void,
+  layoutCallback: () => void,
+  afterMutationCallback: () => void,
+  spawnedWorkCallback: () => void,
+  passiveCallback: () => mixed,
+  errorCallback: (error: mixed) => void,
+  blockedCallback: (name: string) => void,
+  finishedAnimation: () => void,
+): RunningViewTransition {
+  const startedTransition = fabricStartViewTransition(
+    // mutation
+    () => {
+      mutationCallback(); // completeRoot should run here
+      layoutCallback();
+      afterMutationCallback();
+    },
+    // onReady
+    () => {
+      spawnedWorkCallback();
+    },
+    // onComplete
+    () => {
+      passiveCallback();
+    },
+  );
+
+  if (!startedTransition) {
+    if (__DEV__) {
+      console.warn(
+        "startViewTransition didn't kick off transition in Fabric, the ViewTransition ReactNativeFeatureFlag might not be enabled.",
+      );
+    }
+    // Flush remaining work synchronously.
+    mutationCallback();
+    layoutCallback();
+    // Skip afterMutationCallback(). We don't need it since we're not animating.
+    spawnedWorkCallback();
+    // Skip passiveCallback(). Spawned work will schedule a task.
+    return null;
+  }
+
+  return null;
+}
 
 export function appendInitialChild(
   parentInstance: Instance,
@@ -190,7 +454,10 @@ export function createInstance(
     }
   }
 
-  const updatePayload = create(props, viewConfig.validAttributes);
+  const updatePayload = createAttributePayload(
+    props,
+    viewConfig.validAttributes,
+  );
 
   const node = createNode(
     tag, // reactTag
@@ -200,37 +467,17 @@ export function createInstance(
     internalInstanceHandle, // internalInstanceHandle
   );
 
-  if (enableLazyPublicInstanceInFabric) {
-    return {
-      node: node,
-      canonical: {
-        nativeTag: tag,
-        viewConfig,
-        currentProps: props,
-        internalInstanceHandle,
-        publicInstance: null,
-        publicRootInstance: rootContainerInstance.publicInstance,
-      },
-    };
-  } else {
-    const component = createPublicInstance(
-      tag,
+  return {
+    node: node,
+    canonical: {
+      nativeTag: tag,
       viewConfig,
+      currentProps: props,
       internalInstanceHandle,
-      rootContainerInstance.publicInstance,
-    );
-
-    return {
-      node: node,
-      canonical: {
-        nativeTag: tag,
-        viewConfig,
-        currentProps: props,
-        internalInstanceHandle,
-        publicInstance: component,
-      },
-    };
-  }
+      publicInstance: null,
+      publicRootInstance: rootContainerInstance.publicInstance,
+    },
+  };
 }
 
 export function createTextInstance(
@@ -320,6 +567,13 @@ export function getPublicInstance(instance: Instance): null | PublicInstance {
     return instance.canonical.publicInstance;
   }
 
+  // Handle root containers
+  if (instance.containerInfo != null) {
+    if (instance.containerInfo.publicInstance != null) {
+      return instance.containerInfo.publicInstance;
+    }
+  }
+
   // For compatibility with the legacy renderer, in case it's used with Fabric
   // in the same app.
   // $FlowExpectedError[prop-missing]
@@ -361,6 +615,14 @@ export function getPublicInstanceFromInternalInstanceHandle(
 
   const elementInstance: Instance = internalInstanceHandle.stateNode;
   return getPublicInstance(elementInstance);
+}
+
+function getPublicInstanceFromHostFiber(fiber: Fiber): PublicInstance {
+  const publicInstance = getPublicInstance(fiber.stateNode);
+  if (publicInstance === null) {
+    throw new Error('Expected to find a host node. This is a bug in React.');
+  }
+  return publicInstance;
 }
 
 export function prepareForCommit(containerInfo: Container): null | Object {
@@ -439,7 +701,7 @@ export const warnsIfNotActing = false;
 
 export const scheduleTimeout = setTimeout;
 export const cancelTimeout = clearTimeout;
-export const noTimeout = -1;
+export const noTimeout: -1 = -1;
 
 // -------------------
 //     Persistence
@@ -456,7 +718,11 @@ export function cloneInstance(
   newChildSet: ?ChildSet,
 ): Instance {
   const viewConfig = instance.canonical.viewConfig;
-  const updatePayload = diff(oldProps, newProps, viewConfig.validAttributes);
+  const updatePayload = diffAttributePayloads(
+    oldProps,
+    newProps,
+    viewConfig.validAttributes,
+  );
   // TODO: If the event handlers have changed, we need to update the current props
   // in the commit phase but there is no host config hook to do it yet.
   // So instead we hack it by updating it in the render phase.
@@ -505,7 +771,7 @@ export function cloneHiddenInstance(
 ): Instance {
   const viewConfig = instance.canonical.viewConfig;
   const node = instance.node;
-  const updatePayload = create(
+  const updatePayload = createAttributePayload(
     {style: {display: 'none'}},
     viewConfig.validAttributes,
   );
@@ -606,17 +872,35 @@ export function preloadInstance(
   return true;
 }
 
-export function startSuspendingCommit(): void {}
+export opaque type SuspendedState = null;
+
+export function startSuspendingCommit(): SuspendedState {
+  return null;
+}
 
 export function suspendInstance(
+  state: SuspendedState,
   instance: Instance,
   type: Type,
   props: Props,
 ): void {}
 
-export function suspendOnActiveViewTransition(container: Container): void {}
+export function suspendOnActiveViewTransition(
+  state: SuspendedState,
+  container: Container,
+): void {}
 
-export function waitForCommitToBeReady(): null {
+export function waitForCommitToBeReady(
+  state: SuspendedState,
+  timeoutOffset: number,
+): null {
+  return null;
+}
+
+export function getSuspendedCommitReason(
+  state: SuspendedState,
+  rootContainer: Container,
+): null | string {
   return null;
 }
 
@@ -625,6 +909,11 @@ export type FragmentInstanceType = {
   _observers: null | Set<IntersectionObserver>,
   observeUsing: (observer: IntersectionObserver) => void,
   unobserveUsing: (observer: IntersectionObserver) => void,
+  compareDocumentPosition: (otherNode: PublicInstance) => number,
+  getRootNode(getRootNodeOptions?: {
+    composed: boolean,
+  }): Node | FragmentInstanceType,
+  getClientRects: () => Array<DOMRect>,
 };
 
 function FragmentInstance(this: FragmentInstanceType, fragmentFiber: Fiber) {
@@ -644,12 +933,8 @@ FragmentInstance.prototype.observeUsing = function (
   traverseFragmentInstance(this._fragmentFiber, observeChild, observer);
 };
 function observeChild(child: Fiber, observer: IntersectionObserver) {
-  const instance = getInstanceFromHostFiber<Instance>(child);
-  const publicInstance = getPublicInstance(instance);
-  if (publicInstance == null) {
-    throw new Error('Expected to find a host node. This is a bug in React.');
-  }
-  // $FlowFixMe[incompatible-call] Element types are behind a flag in RN
+  const publicInstance = getPublicInstanceFromHostFiber(child);
+  // $FlowFixMe[incompatible-call] DOM types expect Element
   observer.observe(publicInstance);
   return false;
 }
@@ -658,7 +943,8 @@ FragmentInstance.prototype.unobserveUsing = function (
   this: FragmentInstanceType,
   observer: IntersectionObserver,
 ): void {
-  if (this._observers === null || !this._observers.has(observer)) {
+  const observers = this._observers;
+  if (observers === null || !observers.has(observer)) {
     if (__DEV__) {
       console.error(
         'You are calling unobserveUsing() with an observer that is not being observed with this fragment ' +
@@ -666,25 +952,152 @@ FragmentInstance.prototype.unobserveUsing = function (
       );
     }
   } else {
-    this._observers.delete(observer);
+    observers.delete(observer);
     traverseFragmentInstance(this._fragmentFiber, unobserveChild, observer);
   }
 };
 function unobserveChild(child: Fiber, observer: IntersectionObserver) {
-  const instance = getInstanceFromHostFiber<Instance>(child);
-  const publicInstance = getPublicInstance(instance);
-  if (publicInstance == null) {
-    throw new Error('Expected to find a host node. This is a bug in React.');
-  }
-  // $FlowFixMe[incompatible-call] Element types are behind a flag in RN
+  const publicInstance = getPublicInstanceFromHostFiber(child);
+  // $FlowFixMe[incompatible-call] DOM types expect Element
   observer.unobserve(publicInstance);
   return false;
+}
+
+// $FlowFixMe[prop-missing]
+FragmentInstance.prototype.compareDocumentPosition = function (
+  this: FragmentInstanceType,
+  otherNode: PublicInstance,
+): number {
+  const parentHostFiber = getFragmentParentHostFiber(this._fragmentFiber);
+  if (parentHostFiber === null) {
+    return Node.DOCUMENT_POSITION_DISCONNECTED;
+  }
+  const children: Array<Fiber> = [];
+  traverseFragmentInstance(this._fragmentFiber, collectChildren, children);
+  if (children.length === 0) {
+    const parentHostInstance = getPublicInstanceFromHostFiber(parentHostFiber);
+    return compareDocumentPositionForEmptyFragment<PublicInstance>(
+      this._fragmentFiber,
+      parentHostInstance,
+      otherNode,
+      getPublicInstanceFromHostFiber,
+    );
+  }
+
+  const firstInstance = getPublicInstanceFromHostFiber(children[0]);
+  const lastInstance = getPublicInstanceFromHostFiber(
+    children[children.length - 1],
+  );
+
+  // $FlowFixMe[incompatible-use] Fabric PublicInstance is opaque
+  // $FlowFixMe[prop-missing]
+  const firstResult = firstInstance.compareDocumentPosition(otherNode);
+  // $FlowFixMe[incompatible-use] Fabric PublicInstance is opaque
+  // $FlowFixMe[prop-missing]
+  const lastResult = lastInstance.compareDocumentPosition(otherNode);
+
+  const otherNodeIsFirstOrLastChild =
+    firstInstance === otherNode || lastInstance === otherNode;
+  const otherNodeIsWithinFirstOrLastChild =
+    firstResult & Node.DOCUMENT_POSITION_CONTAINED_BY ||
+    lastResult & Node.DOCUMENT_POSITION_CONTAINED_BY;
+  const otherNodeIsBetweenFirstAndLastChildren =
+    firstResult & Node.DOCUMENT_POSITION_FOLLOWING &&
+    lastResult & Node.DOCUMENT_POSITION_PRECEDING;
+  let result;
+  if (
+    otherNodeIsFirstOrLastChild ||
+    otherNodeIsWithinFirstOrLastChild ||
+    otherNodeIsBetweenFirstAndLastChildren
+  ) {
+    result = Node.DOCUMENT_POSITION_CONTAINED_BY;
+  } else {
+    result = firstResult;
+  }
+
+  return result;
+};
+
+function collectChildren(child: Fiber, collection: Array<Fiber>): boolean {
+  collection.push(child);
+  return false;
+}
+
+// $FlowFixMe[prop-missing]
+FragmentInstance.prototype.getRootNode = function (
+  this: FragmentInstanceType,
+  getRootNodeOptions?: {composed: boolean},
+): Node | FragmentInstanceType {
+  const parentHostFiber = getFragmentParentHostFiber(this._fragmentFiber);
+  if (parentHostFiber === null) {
+    return this;
+  }
+  const parentHostInstance = getPublicInstanceFromHostFiber(parentHostFiber);
+  // $FlowFixMe[incompatible-use] Fabric PublicInstance is opaque
+  const rootNode = (parentHostInstance.getRootNode(getRootNodeOptions): Node);
+  return rootNode;
+};
+
+// $FlowFixMe[prop-missing]
+FragmentInstance.prototype.getClientRects = function (
+  this: FragmentInstanceType,
+): Array<DOMRect> {
+  const rects: Array<DOMRect> = [];
+  traverseFragmentInstance(this._fragmentFiber, collectClientRects, rects);
+  return rects;
+};
+function collectClientRects(child: Fiber, rects: Array<DOMRect>): boolean {
+  const instance = getPublicInstanceFromHostFiber(child);
+
+  // getBoundingClientRect is available on Fabric instances while getClientRects is not.
+  // This should work as a substitute in this case because the only equivalent of a multi-rect
+  // element in RN would be a nested Text component.
+  // Since we only use top-level nodes here, we can assume that getBoundingClientRect is sufficient.
+  // $FlowFixMe[method-unbinding]
+  // $FlowFixMe[incompatible-use] Fabric PublicInstance is opaque
+  rects.push(instance.getBoundingClientRect());
+  return false;
+}
+
+function addFragmentHandleToFiber(
+  child: Fiber,
+  fragmentInstance: FragmentInstanceType,
+): boolean {
+  if (enableFragmentRefsInstanceHandles) {
+    const instance = ((getPublicInstanceFromHostFiber(
+      child,
+    ): any): PublicInstanceWithFragmentHandles);
+    if (instance != null) {
+      addFragmentHandleToInstance(instance, fragmentInstance);
+    }
+  }
+  return false;
+}
+
+function addFragmentHandleToInstance(
+  instance: PublicInstanceWithFragmentHandles,
+  fragmentInstance: FragmentInstanceType,
+): void {
+  if (enableFragmentRefsInstanceHandles) {
+    if (instance.unstable_reactFragments == null) {
+      instance.unstable_reactFragments = new Set();
+    }
+    instance.unstable_reactFragments.add(fragmentInstance);
+  }
 }
 
 export function createFragmentInstance(
   fragmentFiber: Fiber,
 ): FragmentInstanceType {
-  return new (FragmentInstance: any)(fragmentFiber);
+  const fragmentInstance = new (FragmentInstance: any)(fragmentFiber);
+  if (enableFragmentRefsInstanceHandles) {
+    traverseFragmentInstance(
+      fragmentFiber,
+      addFragmentHandleToFiber,
+      fragmentInstance,
+    );
+  }
+  return fragmentInstance;
 }
 
 export function updateFragmentInstanceFiber(
@@ -695,21 +1108,39 @@ export function updateFragmentInstanceFiber(
 }
 
 export function commitNewChildToFragmentInstance(
-  child: Fiber,
+  childInstance: Instance,
   fragmentInstance: FragmentInstanceType,
 ): void {
+  const publicInstance = getPublicInstance(childInstance);
   if (fragmentInstance._observers !== null) {
+    if (publicInstance == null) {
+      throw new Error('Expected to find a host node. This is a bug in React.');
+    }
     fragmentInstance._observers.forEach(observer => {
-      observeChild(child, observer);
+      // $FlowFixMe[incompatible-call] Element types are behind a flag in RN
+      observer.observe(publicInstance);
     });
+  }
+  if (enableFragmentRefsInstanceHandles) {
+    addFragmentHandleToInstance(
+      ((publicInstance: any): PublicInstanceWithFragmentHandles),
+      fragmentInstance,
+    );
   }
 }
 
 export function deleteChildFromFragmentInstance(
-  child: Instance,
+  childInstance: Instance,
   fragmentInstance: FragmentInstanceType,
 ): void {
-  // Noop
+  const publicInstance = ((getPublicInstance(
+    childInstance,
+  ): any): PublicInstanceWithFragmentHandles);
+  if (enableFragmentRefsInstanceHandles) {
+    if (publicInstance.unstable_reactFragments != null) {
+      publicInstance.unstable_reactFragments.delete(fragmentInstance);
+    }
+  }
 }
 
 export const NotPendingTransition: TransitionStatus = null;
