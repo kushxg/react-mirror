@@ -1,6 +1,6 @@
 {
   "name": "react-devtools",
-  "version": "6.1.2",
+  "version": "7.0.1",
   "description": "Use react-devtools outside of the browser",
   "license": "MIT",
   "repository": {
@@ -8,9 +8,7 @@
     "url": "https://github.com/facebook/react.git",
     "directory": "packages/react-devtools"
   },
-  "bin": {
-    "react-devtools": "./bin.js"
-  },
+  "bin": "./bin.js",
   "files": [
     "bin.js",
     "app.html",
@@ -26,7 +24,7 @@
     "electron": "^23.1.2",
     "internal-ip": "^6.2.0",
     "minimist": "^1.2.3",
-    "react-devtools-core": "6.1.2",
-    "update-notifier": "^2.1.0"
+    "react-devtools-core": "7.0.1",
+    "update-notifier": "^5.0.0"
   }
 }
