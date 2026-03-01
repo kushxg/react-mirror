@@ -9,24 +9,33 @@ import {Effect, ValueKind, ValueReason} from './HIR';
 import {
   BUILTIN_SHAPES,
   BuiltInArrayId,
-  BuiltInFireFunctionId,
-  BuiltInFireId,
   BuiltInMapId,
   BuiltInMixedReadonlyId,
   BuiltInObjectId,
   BuiltInSetId,
   BuiltInUseActionStateId,
   BuiltInUseContextHookId,
+  BuiltInUseEffectEventId,
   BuiltInUseEffectHookId,
   BuiltInUseInsertionEffectHookId,
   BuiltInUseLayoutEffectHookId,
   BuiltInUseOperatorId,
+  BuiltInUseOptimisticId,
   BuiltInUseReducerId,
   BuiltInUseRefId,
   BuiltInUseStateId,
   BuiltInUseTransitionId,
   BuiltInWeakMapId,
   BuiltInWeakSetId,
+  BuiltInEffectEventId,
+  BuiltInIntlDateTimeFormatId,
+  BuiltInIntlNumberFormatId,
+  BuiltInIntlCollatorId,
+  BuiltInIntlPluralRulesId,
+  BuiltInIntlListFormatId,
+  BuiltInIntlRelativeTimeFormatId,
+  BuiltInIntlSegmenterId,
+  BuiltInIntlDisplayNamesId,
   ReanimatedSharedValueId,
   ShapeRegistry,
   addFunction,
@@ -109,6 +118,99 @@ const TYPED_GLOBALS: Array<[string, BuiltInType]> = [
           returnType: {kind: 'Object', shapeId: BuiltInObjectId},
           calleeEffect: Effect.Read,
           returnValueKind: ValueKind.Mutable,
+        }),
+      ],
+      [
+        'entries',
+        addFunction(DEFAULT_SHAPES, [], {
+          positionalParams: [Effect.Capture],
+          restParam: null,
+          returnType: {kind: 'Object', shapeId: BuiltInArrayId},
+          calleeEffect: Effect.Read,
+          returnValueKind: ValueKind.Mutable,
+          aliasing: {
+            receiver: '@receiver',
+            params: ['@object'],
+            rest: null,
+            returns: '@returns',
+            temporaries: [],
+            effects: [
+              {
+                kind: 'Create',
+                into: '@returns',
+                reason: ValueReason.KnownReturnSignature,
+                value: ValueKind.Mutable,
+              },
+              // Object values are captured into the return
+              {
+                kind: 'Capture',
+                from: '@object',
+                into: '@returns',
+              },
+            ],
+          },
+        }),
+      ],
+      [
+        'keys',
+        addFunction(DEFAULT_SHAPES, [], {
+          positionalParams: [Effect.Read],
+          restParam: null,
+          returnType: {kind: 'Object', shapeId: BuiltInArrayId},
+          calleeEffect: Effect.Read,
+          returnValueKind: ValueKind.Mutable,
+          aliasing: {
+            receiver: '@receiver',
+            params: ['@object'],
+            rest: null,
+            returns: '@returns',
+            temporaries: [],
+            effects: [
+              {
+                kind: 'Create',
+                into: '@returns',
+                reason: ValueReason.KnownReturnSignature,
+                value: ValueKind.Mutable,
+              },
+              // Only keys are captured, and keys are immutable
+              {
+                kind: 'ImmutableCapture',
+                from: '@object',
+                into: '@returns',
+              },
+            ],
+          },
+        }),
+      ],
+      [
+        'values',
+        addFunction(DEFAULT_SHAPES, [], {
+          positionalParams: [Effect.Capture],
+          restParam: null,
+          returnType: {kind: 'Object', shapeId: BuiltInArrayId},
+          calleeEffect: Effect.Read,
+          returnValueKind: ValueKind.Mutable,
+          aliasing: {
+            receiver: '@receiver',
+            params: ['@object'],
+            rest: null,
+            returns: '@returns',
+            temporaries: [],
+            effects: [
+              {
+                kind: 'Create',
+                into: '@returns',
+                reason: ValueReason.KnownReturnSignature,
+                value: ValueKind.Mutable,
+              },
+              // Object values are captured into the return
+              {
+                kind: 'Capture',
+                from: '@object',
+                into: '@returns',
+              },
+            ],
+          },
         }),
       ],
     ]),
@@ -526,6 +628,145 @@ const TYPED_GLOBALS: Array<[string, BuiltInType]> = [
       true,
     ),
   ],
+  [
+    'Intl',
+    addObject(DEFAULT_SHAPES, 'Intl', [
+      [
+        'DateTimeFormat',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {
+              kind: 'Object',
+              shapeId: BuiltInIntlDateTimeFormatId,
+            },
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+      [
+        'NumberFormat',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {kind: 'Object', shapeId: BuiltInIntlNumberFormatId},
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+      [
+        'Collator',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {kind: 'Object', shapeId: BuiltInIntlCollatorId},
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+      [
+        'PluralRules',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {kind: 'Object', shapeId: BuiltInIntlPluralRulesId},
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+      [
+        'ListFormat',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {kind: 'Object', shapeId: BuiltInIntlListFormatId},
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+      [
+        'RelativeTimeFormat',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {
+              kind: 'Object',
+              shapeId: BuiltInIntlRelativeTimeFormatId,
+            },
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+      [
+        'Segmenter',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {kind: 'Object', shapeId: BuiltInIntlSegmenterId},
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+      [
+        'DisplayNames',
+        addFunction(
+          DEFAULT_SHAPES,
+          [],
+          {
+            positionalParams: [Effect.Read, Effect.Read],
+            restParam: null,
+            returnType: {kind: 'Object', shapeId: BuiltInIntlDisplayNamesId},
+            calleeEffect: Effect.Read,
+            returnValueKind: ValueKind.Frozen,
+          },
+          null,
+          true,
+        ),
+      ],
+    ]),
+  ],
   // TODO: rest of Global objects
 ];
 
@@ -642,6 +883,41 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
         calleeEffect: Effect.Read,
         hookKind: 'useEffect',
         returnValueKind: ValueKind.Frozen,
+        aliasing: {
+          receiver: '@receiver',
+          params: [],
+          rest: '@rest',
+          returns: '@returns',
+          temporaries: ['@effect'],
+          effects: [
+            // Freezes the function and deps
+            {
+              kind: 'Freeze',
+              value: '@rest',
+              reason: ValueReason.Effect,
+            },
+            // Internally creates an effect object that captures the function and deps
+            {
+              kind: 'Create',
+              into: '@effect',
+              value: ValueKind.Frozen,
+              reason: ValueReason.KnownReturnSignature,
+            },
+            // The effect stores the function and dependencies
+            {
+              kind: 'Capture',
+              from: '@rest',
+              into: '@effect',
+            },
+            // Returns undefined
+            {
+              kind: 'Create',
+              into: '@returns',
+              value: ValueKind.Primitive,
+              reason: ValueReason.KnownReturnSignature,
+            },
+          ],
+        },
       },
       BuiltInUseEffectHookId,
     ),
@@ -688,6 +964,18 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
     }),
   ],
   [
+    'useOptimistic',
+    addHook(DEFAULT_SHAPES, {
+      positionalParams: [],
+      restParam: Effect.Freeze,
+      returnType: {kind: 'Object', shapeId: BuiltInUseOptimisticId},
+      calleeEffect: Effect.Read,
+      hookKind: 'useOptimistic',
+      returnValueKind: ValueKind.Frozen,
+      returnValueReason: ValueReason.State,
+    }),
+  ],
+  [
     'use',
     addFunction(
       DEFAULT_SHAPES,
@@ -703,23 +991,24 @@ const REACT_APIS: Array<[string, BuiltInType]> = [
     ),
   ],
   [
-    'fire',
-    addFunction(
+    'useEffectEvent',
+    addHook(
       DEFAULT_SHAPES,
-      [],
       {
         positionalParams: [],
-        restParam: null,
+        restParam: Effect.Freeze,
         returnType: {
           kind: 'Function',
           return: {kind: 'Poly'},
-          shapeId: BuiltInFireFunctionId,
+          shapeId: BuiltInEffectEventId,
           isConstructor: false,
         },
         calleeEffect: Effect.Read,
+        hookKind: 'useEffectEvent',
+        // Frozen because it should not mutate any locally-bound values
         returnValueKind: ValueKind.Frozen,
       },
-      BuiltInFireId,
+      BuiltInUseEffectEventId,
     ),
   ],
 ];
@@ -847,6 +1136,8 @@ export function installTypeConfig(
         noAlias: typeConfig.noAlias === true,
         mutableOnlyIfOperandsAreMutable:
           typeConfig.mutableOnlyIfOperandsAreMutable === true,
+        aliasing: typeConfig.aliasing,
+        knownIncompatible: typeConfig.knownIncompatible ?? null,
       });
     }
     case 'hook': {
@@ -864,6 +1155,8 @@ export function installTypeConfig(
         ),
         returnValueKind: typeConfig.returnValueKind ?? ValueKind.Frozen,
         noAlias: typeConfig.noAlias === true,
+        aliasing: typeConfig.aliasing,
+        knownIncompatible: typeConfig.knownIncompatible ?? null,
       });
     }
     case 'object': {
