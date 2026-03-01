@@ -184,6 +184,10 @@ describe('ReactFabric', () => {
       nativeFabricUIManager.cloneNodeWithNewChildrenAndProps,
     ).not.toBeCalled();
 
+    jest
+      .spyOn(ReactNativePrivateInterface, 'diffAttributePayloads')
+      .mockReturnValue({bar: 'b'});
+
     await act(() => {
       ReactFabric.render(
         <Text foo="a" bar="b">
@@ -203,6 +207,9 @@ describe('ReactFabric', () => {
  RCTText {"foo":"a","bar":"b"}
    RCTRawText {"text":"1"}`);
 
+    jest
+      .spyOn(ReactNativePrivateInterface, 'diffAttributePayloads')
+      .mockReturnValue({foo: 'b'});
     await act(() => {
       ReactFabric.render(
         <Text foo="b" bar="b">
@@ -280,7 +287,6 @@ describe('ReactFabric', () => {
     expect(nativeFabricUIManager.completeRoot).toBeCalled();
   });
 
-  // @gate enablePersistedModeClonedFlag
   it('should not clone nodes when layout effects are used', async () => {
     const View = createReactNativeComponentClass('RCTView', () => ({
       validAttributes: {foo: true},
@@ -298,6 +304,8 @@ describe('ReactFabric', () => {
           <ComponentWithEffect />
         </View>,
         11,
+        null,
+        true,
       ),
     );
     expect(nativeFabricUIManager.completeRoot).toBeCalled();
@@ -309,6 +317,8 @@ describe('ReactFabric', () => {
           <ComponentWithEffect />
         </View>,
         11,
+        null,
+        true,
       ),
     );
     expect(nativeFabricUIManager.cloneNode).not.toBeCalled();
@@ -320,7 +330,6 @@ describe('ReactFabric', () => {
     expect(nativeFabricUIManager.completeRoot).not.toBeCalled();
   });
 
-  // @gate enablePersistedModeClonedFlag
   it('should not clone nodes when insertion effects are used', async () => {
     const View = createReactNativeComponentClass('RCTView', () => ({
       validAttributes: {foo: true},
@@ -338,6 +347,8 @@ describe('ReactFabric', () => {
           <ComponentWithRef />
         </View>,
         11,
+        null,
+        true,
       ),
     );
     expect(nativeFabricUIManager.completeRoot).toBeCalled();
@@ -349,6 +360,8 @@ describe('ReactFabric', () => {
           <ComponentWithRef />
         </View>,
         11,
+        null,
+        true,
       ),
     );
     expect(nativeFabricUIManager.cloneNode).not.toBeCalled();
@@ -360,7 +373,6 @@ describe('ReactFabric', () => {
     expect(nativeFabricUIManager.completeRoot).not.toBeCalled();
   });
 
-  // @gate enablePersistedModeClonedFlag
   it('should not clone nodes when useImperativeHandle is used', async () => {
     const View = createReactNativeComponentClass('RCTView', () => ({
       validAttributes: {foo: true},
@@ -380,6 +392,8 @@ describe('ReactFabric', () => {
           <ComponentWithImperativeHandle ref={ref} />
         </View>,
         11,
+        null,
+        true,
       ),
     );
     expect(nativeFabricUIManager.completeRoot).toBeCalled();
@@ -392,6 +406,8 @@ describe('ReactFabric', () => {
           <ComponentWithImperativeHandle ref={ref} />
         </View>,
         11,
+        null,
+        true,
       ),
     );
     expect(nativeFabricUIManager.cloneNode).not.toBeCalled();
@@ -461,9 +477,7 @@ describe('ReactFabric', () => {
 
     expect(nativeFabricUIManager.dispatchCommand).not.toBeCalled();
     ReactFabric.dispatchCommand(viewRef, 'updateCommand', [10, 20]);
-    assertConsoleErrorDev([DISPATCH_COMMAND_REQUIRES_HOST_COMPONENT], {
-      withoutStack: true,
-    });
+    assertConsoleErrorDev([DISPATCH_COMMAND_REQUIRES_HOST_COMPONENT]);
 
     expect(nativeFabricUIManager.dispatchCommand).not.toBeCalled();
   });
@@ -526,9 +540,7 @@ describe('ReactFabric', () => {
 
     expect(nativeFabricUIManager.sendAccessibilityEvent).not.toBeCalled();
     ReactFabric.sendAccessibilityEvent(viewRef, 'eventTypeName');
-    assertConsoleErrorDev([SEND_ACCESSIBILITY_EVENT_REQUIRES_HOST_COMPONENT], {
-      withoutStack: true,
-    });
+    assertConsoleErrorDev([SEND_ACCESSIBILITY_EVENT_REQUIRES_HOST_COMPONENT]);
 
     expect(nativeFabricUIManager.sendAccessibilityEvent).not.toBeCalled();
   });
@@ -612,7 +624,7 @@ describe('ReactFabric', () => {
       ReactFabric.render(<Component chars={before} />, 11, null, true);
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(`11
- RCTView null
+ RCTView {}
    RCTView {"title":"a"}
    RCTView {"title":"b"}
    RCTView {"title":"c"}
@@ -638,7 +650,7 @@ describe('ReactFabric', () => {
       ReactFabric.render(<Component chars={after} />, 11, null, true);
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(`11
- RCTView null
+ RCTView {}
    RCTView {"title":"m"}
    RCTView {"title":"x"}
    RCTView {"title":"h"}
@@ -700,8 +712,8 @@ describe('ReactFabric', () => {
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(
       `11
- RCTView null
-   RCTView null
+ RCTView {}
+   RCTView {}
      RCTView {"title":"a"}
      RCTView {"title":"b"}
      RCTView {"title":"c"}
@@ -732,8 +744,8 @@ describe('ReactFabric', () => {
       });
     });
     expect(nativeFabricUIManager.__dumpHierarchyForJestTestsOnly()).toBe(`11
- RCTView null
-   RCTView null
+ RCTView {}
+   RCTView {}
      RCTView {"title":"m"}
      RCTView {"title":"x"}
      RCTView {"title":"h"}
@@ -1087,6 +1099,8 @@ describe('ReactFabric', () => {
               // Check for referential equality
               expect(ref1.current).toBe(event.target);
               expect(ref1.current).toBe(event.currentTarget);
+
+              expect(global.event).toBe(event);
             }}
             onStartShouldSetResponder={() => true}
           />
@@ -1098,6 +1112,8 @@ describe('ReactFabric', () => {
               // Check for referential equality
               expect(ref2.current).toBe(event.target);
               expect(ref2.current).toBe(event.currentTarget);
+
+              expect(global.event).toBe(event);
             }}
             onStartShouldSetResponder={() => true}
           />
@@ -1110,6 +1126,9 @@ describe('ReactFabric', () => {
 
     const [dispatchEvent] =
       nativeFabricUIManager.registerEventHandler.mock.calls[0];
+
+    const preexistingEvent = {};
+    global.event = preexistingEvent;
 
     dispatchEvent(getViewById('one').instanceHandle, 'topTouchStart', {
       target: getViewById('one').reactTag,
@@ -1138,7 +1157,141 @@ describe('ReactFabric', () => {
       changedTouches: [],
     });
 
-    expect.assertions(6);
+    expect(global.event).toBe(preexistingEvent);
+
+    expect.assertions(9);
+  });
+
+  it('propagates timeStamps from native events and sets defaults', async () => {
+    const View = createReactNativeComponentClass('RCTView', () => ({
+      validAttributes: {
+        id: true,
+      },
+      uiViewClassName: 'RCTView',
+      directEventTypes: {
+        topTouchStart: {
+          registrationName: 'onTouchStart',
+        },
+        topTouchEnd: {
+          registrationName: 'onTouchEnd',
+        },
+      },
+    }));
+
+    function getViewById(id) {
+      const [reactTag, , , , instanceHandle] =
+        nativeFabricUIManager.createNode.mock.calls.find(
+          args => args[3] && args[3].id === id,
+        );
+
+      return {reactTag, instanceHandle};
+    }
+
+    const ref1 = React.createRef();
+    const ref2 = React.createRef();
+    const ref3 = React.createRef();
+
+    const explicitTimeStampCamelCase = 'explicit-timestamp-camelcase';
+    const explicitTimeStampLowerCase = 'explicit-timestamp-lowercase';
+    const performanceNowValue = 'performance-now-timestamp';
+
+    jest.spyOn(performance, 'now').mockReturnValue(performanceNowValue);
+
+    await act(() => {
+      ReactFabric.render(
+        <>
+          <View
+            ref={ref1}
+            id="default"
+            onTouchEnd={event => {
+              expect(event.timeStamp).toBe(performanceNowValue);
+            }}
+          />
+          <View
+            ref={ref2}
+            id="explicitTimeStampCamelCase"
+            onTouchEnd={event => {
+              expect(event.timeStamp).toBe(explicitTimeStampCamelCase);
+            }}
+          />
+          <View
+            ref={ref2}
+            id="explicitTimeStampLowerCase"
+            onTouchEnd={event => {
+              expect(event.timeStamp).toBe(explicitTimeStampLowerCase);
+            }}
+          />
+        </>,
+        1,
+        null,
+        true,
+      );
+    });
+
+    const [dispatchEvent] =
+      nativeFabricUIManager.registerEventHandler.mock.calls[0];
+
+    dispatchEvent(getViewById('default').instanceHandle, 'topTouchStart', {
+      target: getViewById('default').reactTag,
+      identifier: 17,
+      touches: [],
+      changedTouches: [],
+    });
+    dispatchEvent(getViewById('default').instanceHandle, 'topTouchEnd', {
+      target: getViewById('default').reactTag,
+      identifier: 17,
+      touches: [],
+      changedTouches: [],
+      // No timeStamp property
+    });
+
+    dispatchEvent(
+      getViewById('explicitTimeStampCamelCase').instanceHandle,
+      'topTouchStart',
+      {
+        target: getViewById('explicitTimeStampCamelCase').reactTag,
+        identifier: 17,
+        touches: [],
+        changedTouches: [],
+      },
+    );
+
+    dispatchEvent(
+      getViewById('explicitTimeStampCamelCase').instanceHandle,
+      'topTouchEnd',
+      {
+        target: getViewById('explicitTimeStampCamelCase').reactTag,
+        identifier: 17,
+        touches: [],
+        changedTouches: [],
+        timeStamp: explicitTimeStampCamelCase,
+      },
+    );
+
+    dispatchEvent(
+      getViewById('explicitTimeStampLowerCase').instanceHandle,
+      'topTouchStart',
+      {
+        target: getViewById('explicitTimeStampLowerCase').reactTag,
+        identifier: 17,
+        touches: [],
+        changedTouches: [],
+      },
+    );
+
+    dispatchEvent(
+      getViewById('explicitTimeStampLowerCase').instanceHandle,
+      'topTouchEnd',
+      {
+        target: getViewById('explicitTimeStampLowerCase').reactTag,
+        identifier: 17,
+        touches: [],
+        changedTouches: [],
+        timestamp: explicitTimeStampLowerCase,
+      },
+    );
+
+    expect.assertions(3);
   });
 
   it('findHostInstance_DEPRECATED should warn if used to find a host component inside StrictMode', async () => {
