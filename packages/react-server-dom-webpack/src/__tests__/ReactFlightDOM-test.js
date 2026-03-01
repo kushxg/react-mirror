@@ -19,6 +19,7 @@ global.TextEncoder = require('util').TextEncoder;
 global.TextDecoder = require('util').TextDecoder;
 
 let act;
+let serverAct;
 let use;
 let clientExports;
 let clientExportsESM;
@@ -33,12 +34,9 @@ let ReactServerDOMServer;
 let ReactServerDOMStaticServer;
 let ReactServerDOMClient;
 let ReactDOMFizzServer;
-let ReactDOMStaticServer;
 let Suspense;
 let ErrorBoundary;
 let JSDOM;
-let ReactServerScheduler;
-let reactServerAct;
 let assertConsoleErrorDev;
 
 describe('ReactFlightDOM', () => {
@@ -48,11 +46,13 @@ describe('ReactFlightDOM', () => {
     // condition
     jest.resetModules();
 
+    // Some of the tests pollute the head.
+    document.head.innerHTML = '';
+
     JSDOM = require('jsdom').JSDOM;
 
-    ReactServerScheduler = require('scheduler');
-    patchSetImmediate(ReactServerScheduler);
-    reactServerAct = require('internal-test-utils').act;
+    patchSetImmediate();
+    serverAct = require('internal-test-utils').serverAct;
 
     // Simulate the condition resolution
     jest.mock('react', () => require('react/react.react-server'));
@@ -60,13 +60,11 @@ describe('ReactFlightDOM', () => {
     FlightReactDOM = require('react-dom');
 
     jest.mock('react-server-dom-webpack/server', () =>
-      require('react-server-dom-webpack/server.node.unbundled'),
+      require('react-server-dom-unbundled/server.node'),
     );
-    if (__EXPERIMENTAL__) {
-      jest.mock('react-server-dom-webpack/static', () =>
-        require('react-server-dom-webpack/static.node.unbundled'),
-      );
-    }
+    jest.mock('react-server-dom-webpack/static', () =>
+      require('react-server-dom-unbundled/static.node'),
+    );
     const WebpackMock = require('./utils/WebpackMock');
     clientExports = WebpackMock.clientExports;
     clientExportsESM = WebpackMock.clientExportsESM;
@@ -74,9 +72,7 @@ describe('ReactFlightDOM', () => {
     webpackMap = WebpackMock.webpackMap;
 
     ReactServerDOMServer = require('react-server-dom-webpack/server');
-    if (__EXPERIMENTAL__) {
-      ReactServerDOMStaticServer = require('react-server-dom-webpack/static');
-    }
+    ReactServerDOMStaticServer = require('react-server-dom-webpack/static');
 
     // This reset is to load modules for the SSR/Browser scope.
     jest.unmock('react-server-dom-webpack/server');
@@ -91,7 +87,6 @@ describe('ReactFlightDOM', () => {
     Suspense = React.Suspense;
     ReactDOMClient = require('react-dom/client');
     ReactDOMFizzServer = require('react-dom/server.node');
-    ReactDOMStaticServer = require('react-dom/static.node');
     ReactServerDOMClient = require('react-server-dom-webpack/client');
 
     ErrorBoundary = class extends React.Component {
@@ -110,17 +105,6 @@ describe('ReactFlightDOM', () => {
       }
     };
   });
-
-  async function serverAct(callback) {
-    let maybePromise;
-    await reactServerAct(() => {
-      maybePromise = callback();
-      if (maybePromise && typeof maybePromise.catch === 'function') {
-        maybePromise.catch(() => {});
-      }
-    });
-    return maybePromise;
-  }
 
   async function readInto(
     container: Document | HTMLElement,
@@ -170,6 +154,23 @@ describe('ReactFlightDOM', () => {
       readable,
       writable,
     };
+  }
+
+  function createUnclosingStream(
+    stream: ReadableStream<Uint8Array>,
+  ): ReadableStream<Uint8Array> {
+    const reader = stream.getReader();
+
+    const s = new ReadableStream({
+      async pull(controller) {
+        const {done, value} = await reader.read();
+        if (!done) {
+          controller.enqueue(value);
+        }
+      },
+    });
+
+    return s;
   }
 
   const theInfinitePromise = new Promise(() => {});
@@ -786,7 +787,7 @@ describe('ReactFlightDOM', () => {
     <ClientModule.Component key="this adds instrumentation" />;
   });
 
-  it('throws when accessing a Context.Provider below the client exports', () => {
+  it('does not throw when accessing a Context.Provider from client exports', () => {
     const Context = React.createContext();
     const ClientModule = clientExports({
       Context,
@@ -794,11 +795,60 @@ describe('ReactFlightDOM', () => {
     function dotting() {
       return ClientModule.Context.Provider;
     }
-    expect(dotting).toThrowError(
-      `Cannot render a Client Context Provider on the Server. ` +
-        `Instead, you can export a Client Component wrapper ` +
-        `that itself renders a Client Context Provider.`,
+    expect(dotting).not.toThrowError();
+  });
+
+  it('can render a client Context.Provider from a server component', async () => {
+    // Create a context in a client module
+    const TestContext = React.createContext('default');
+    const ClientModule = clientExports({
+      TestContext,
+    });
+
+    // Client component that reads context
+    function ClientConsumer() {
+      const value = React.useContext(TestContext);
+      return <span>{value}</span>;
+    }
+    const {ClientConsumer: ClientConsumerRef} = clientExports({ClientConsumer});
+
+    function Print({response}) {
+      return use(response);
+    }
+
+    function App({response}) {
+      return (
+        <Suspense fallback={<h1>Loading...</h1>}>
+          <Print response={response} />
+        </Suspense>
+      );
+    }
+
+    // Server component that provides context
+    function ServerApp() {
+      return (
+        <ClientModule.TestContext.Provider value="from-server">
+          <div>
+            <ClientConsumerRef />
+          </div>
+        </ClientModule.TestContext.Provider>
+      );
+    }
+
+    const {writable, readable} = getTestStream();
+    const {pipe} = await serverAct(() =>
+      ReactServerDOMServer.renderToPipeableStream(<ServerApp />, webpackMap),
     );
+    pipe(writable);
+    const response = ReactServerDOMClient.createFromReadableStream(readable);
+
+    const container = document.createElement('div');
+    const root = ReactDOMClient.createRoot(container);
+    await act(() => {
+      root.render(<App response={response} />);
+    });
+
+    expect(container.innerHTML).toBe('<div><span>from-server</span></div>');
   });
 
   it('should progressively reveal server components', async () => {
@@ -1647,89 +1697,6 @@ describe('ReactFlightDOM', () => {
     expect(getMeaningfulChildren(container)).toEqual(<p>hello world</p>);
   });
 
-  // @gate enablePostpone
-  it('should allow postponing in Flight through a serialized promise', async () => {
-    const Context = React.createContext();
-    const ContextProvider = Context.Provider;
-
-    function Foo() {
-      const value = React.use(React.useContext(Context));
-      return <span>{value}</span>;
-    }
-
-    const ClientModule = clientExports({
-      ContextProvider,
-      Foo,
-    });
-
-    async function getFoo() {
-      React.unstable_postpone('foo');
-    }
-
-    function App() {
-      return (
-        <ClientModule.ContextProvider value={getFoo()}>
-          <div>
-            <Suspense fallback="loading...">
-              <ClientModule.Foo />
-            </Suspense>
-          </div>
-        </ClientModule.ContextProvider>
-      );
-    }
-
-    const {writable, readable} = getTestStream();
-
-    const {pipe} = await serverAct(() =>
-      ReactServerDOMServer.renderToPipeableStream(<App />, webpackMap),
-    );
-    pipe(writable);
-
-    let response = null;
-    function getResponse() {
-      if (response === null) {
-        response = ReactServerDOMClient.createFromReadableStream(readable);
-      }
-      return response;
-    }
-
-    function Response() {
-      return getResponse();
-    }
-
-    const errors = [];
-    function onError(error, errorInfo) {
-      errors.push(error, errorInfo);
-    }
-    const result = await serverAct(() =>
-      ReactDOMStaticServer.prerenderToNodeStream(<Response />, {
-        onError,
-      }),
-    );
-
-    const prelude = await new Promise((resolve, reject) => {
-      let content = '';
-      result.prelude.on('data', chunk => {
-        content += Buffer.from(chunk).toString('utf8');
-      });
-      result.prelude.on('error', error => {
-        reject(error);
-      });
-      result.prelude.on('end', () => resolve(content));
-    });
-
-    expect(errors).toEqual([]);
-    const doc = new JSDOM(prelude).window.document;
-    expect(getMeaningfulChildren(doc)).toEqual(
-      <html>
-        <head />
-        <body>
-          <div>loading...</div>
-        </body>
-      </html>,
-    );
-  });
-
   it('should support float methods when rendering in Fizz', async () => {
     function Component() {
       return <p>hello world</p>;
@@ -1921,14 +1888,28 @@ describe('ReactFlightDOM', () => {
     expect(content1).toEqual(
       '<!DOCTYPE html><html><head><link rel="preload" href="before1" as="style"/>' +
         '<link rel="preload" href="after1" as="style"/>' +
-        '<link rel="expect" href="#«R»" blocking="render"/></head>' +
-        '<body><p>hello world</p><template id="«R»"></template></body></html>',
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<link rel="expect" href="#_R_" blocking="render"/>'
+          : '') +
+        '</head>' +
+        '<body><p>hello world</p>' +
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<template id="_R_"></template>'
+          : '') +
+        '</body></html>',
     );
     expect(content2).toEqual(
       '<!DOCTYPE html><html><head><link rel="preload" href="before2" as="style"/>' +
         '<link rel="preload" href="after2" as="style"/>' +
-        '<link rel="expect" href="#«R»" blocking="render"/></head>' +
-        '<body><p>hello world</p><template id="«R»"></template></body></html>',
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<link rel="expect" href="#_R_" blocking="render"/>'
+          : '') +
+        '</head>' +
+        '<body><p>hello world</p>' +
+        (gate(flags => flags.enableFizzBlockingRender)
+          ? '<template id="_R_"></template>'
+          : '') +
+        '</body></html>',
     );
   });
 
@@ -1995,6 +1976,173 @@ describe('ReactFlightDOM', () => {
 
     await collectHints(readable);
     expect(hintRows.length).toEqual(6);
+  });
+
+  it('does not duplicate font preload links from Flight hints during Fizz SSR', async () => {
+    async function ServerComponent() {
+      return (
+        <html>
+          <head>
+            <link
+              rel="preload"
+              as="font"
+              href="font-resource"
+              type="font/woff2"
+            />
+          </head>
+        </html>
+      );
+    }
+
+    const {writable: flightWritable, readable: flightReadable} =
+      getTestStream();
+    const {pipe} = await serverAct(() =>
+      ReactServerDOMServer.renderToPipeableStream(
+        <ServerComponent />,
+        webpackMap,
+      ),
+    );
+    pipe(flightWritable);
+
+    let response = null;
+    function getResponse() {
+      if (response === null) {
+        response =
+          ReactServerDOMClient.createFromReadableStream(flightReadable);
+      }
+      return response;
+    }
+
+    function App() {
+      return (
+        <html>
+          <body>{getResponse()}</body>
+        </html>
+      );
+    }
+
+    const {writable: fizzWritable, readable: fizzReadable} = getTestStream();
+    await serverAct(async () => {
+      ReactDOMFizzServer.renderToPipeableStream(<App />).pipe(fizzWritable);
+    });
+
+    async function read(stream) {
+      const decoder = new TextDecoder();
+      const reader = stream.getReader();
+      let buffer = '';
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) {
+          buffer += decoder.decode();
+          break;
+        }
+        buffer += decoder.decode(value, {stream: true});
+      }
+      return buffer;
+    }
+
+    // currently <link rel="preload" as="font" ..> is emitted twice
+    const html = await read(fizzReadable);
+    expect(html).toEqual(`<!DOCTYPE html><html><head><link rel="preload" href="font-resource" as="font" type="font/woff2"/><link rel="expect" href="#_R_" blocking="render"/><link rel="preload" as="font" href="font-resource" type="font/woff2"/></head><body><html><head></head></html><template id="_R_"></template></body></html>`)
+  });
+
+  it('preloads resources without needing to render them', async () => {
+    function NoScriptComponent() {
+      return (
+        <p>
+          <img src="image-do-not-load" />
+          <link rel="stylesheet" href="css-do-not-load" />
+        </p>
+      );
+    }
+
+    function Component() {
+      return (
+        <div>
+          <img src="image-resource" />
+          <img
+            src="image-do-not-load"
+            srcSet="image-preload-src-set"
+            sizes="image-sizes"
+          />
+          <img src="image-do-not-load" loading="lazy" />
+          <link
+            rel="preload"
+            href="video-resource"
+            as="video"
+            media="(orientation: landscape)"
+          />
+          <link rel="modulepreload" href="module-resource" />
+          <picture>
+            <source
+              srcSet="image-not-yet-preloaded"
+              media="(orientation: portrait)"
+            />
+            <img src="image-do-not-load" />
+          </picture>
+          <noscript>
+            <NoScriptComponent />
+          </noscript>
+          <link rel="stylesheet" href="css-resource" />
+        </div>
+      );
+    }
+
+    const {writable, readable} = getTestStream();
+    const {pipe} = await serverAct(() =>
+      ReactServerDOMServer.renderToPipeableStream(<Component />, webpackMap),
+    );
+    pipe(writable);
+
+    let response = null;
+    function getResponse() {
+      if (response === null) {
+        response = ReactServerDOMClient.createFromReadableStream(readable);
+      }
+      return response;
+    }
+
+    function App() {
+      // Not rendered but use for its side-effects.
+      getResponse();
+      return (
+        <html>
+          <body>
+            <p>hello world</p>
+          </body>
+        </html>
+      );
+    }
+
+    const root = ReactDOMClient.createRoot(document);
+    await act(() => {
+      root.render(<App />);
+    });
+
+    expect(getMeaningfulChildren(document)).toEqual(
+      <html>
+        <head>
+          <link rel="preload" as="image" href="image-resource" />
+          <link
+            rel="preload"
+            as="image"
+            imagesrcset="image-preload-src-set"
+            imagesizes="image-sizes"
+          />
+          <link
+            rel="preload"
+            as="video"
+            href="video-resource"
+            media="(orientation: landscape)"
+          />
+          <link rel="modulepreload" href="module-resource" />
+          <link rel="preload" as="style" href="css-resource" />
+        </head>
+        <body>
+          <p>hello world</p>
+        </body>
+      </html>,
+    );
   });
 
   it('should be able to include a client reference in printed errors', async () => {
@@ -2114,7 +2262,8 @@ describe('ReactFlightDOM', () => {
       pipe(flightWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     const response =
@@ -2138,9 +2287,12 @@ describe('ReactFlightDOM', () => {
       ).pipe(fizzWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2204,7 +2356,8 @@ describe('ReactFlightDOM', () => {
     });
 
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     const response =
@@ -2229,9 +2382,12 @@ describe('ReactFlightDOM', () => {
     });
 
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2296,7 +2452,8 @@ describe('ReactFlightDOM', () => {
       pipe(flightWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     const response =
@@ -2320,9 +2477,12 @@ describe('ReactFlightDOM', () => {
       ).pipe(fizzWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2385,7 +2545,8 @@ describe('ReactFlightDOM', () => {
       pipe(flightWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     const response =
@@ -2409,9 +2570,12 @@ describe('ReactFlightDOM', () => {
       ).pipe(fizzWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2473,7 +2637,8 @@ describe('ReactFlightDOM', () => {
     });
 
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     const response =
@@ -2497,9 +2662,12 @@ describe('ReactFlightDOM', () => {
       ).pipe(fizzWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2565,7 +2733,8 @@ describe('ReactFlightDOM', () => {
     });
 
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     const response =
@@ -2589,8 +2758,10 @@ describe('ReactFlightDOM', () => {
       ).pipe(fizzWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'The render was aborted by the server without a reason.',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2637,7 +2808,8 @@ describe('ReactFlightDOM', () => {
     });
 
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     const response =
@@ -2661,7 +2833,8 @@ describe('ReactFlightDOM', () => {
       ).pipe(fizzWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2729,8 +2902,9 @@ describe('ReactFlightDOM', () => {
     });
 
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'bam!',
+      'Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      'Error: bam!\n    in <stack>',
     ]);
 
     const response =
@@ -2754,8 +2928,9 @@ describe('ReactFlightDOM', () => {
       ).pipe(fizzWritable);
     });
     assertConsoleErrorDev([
-      'The render was aborted by the server without a reason.',
-      'bam!',
+      '[Server] Error: The render was aborted by the server without a reason.' +
+        '\n    in <stack>',
+      '[Server] Error: bam!\n    in <stack>',
     ]);
 
     expect(shellErrors).toEqual([]);
@@ -2771,7 +2946,6 @@ describe('ReactFlightDOM', () => {
     );
   });
 
-  // @gate experimental
   it('can prerender', async () => {
     let resolveGreeting;
     const greetingPromise = new Promise(resolve => {
@@ -2794,11 +2968,10 @@ describe('ReactFlightDOM', () => {
     const {pendingResult} = await serverAct(async () => {
       // destructure trick to avoid the act scope from awaiting the returned value
       return {
-        pendingResult:
-          ReactServerDOMStaticServer.unstable_prerenderToNodeStream(
-            <App />,
-            webpackMap,
-          ),
+        pendingResult: ReactServerDOMStaticServer.prerenderToNodeStream(
+          <App />,
+          webpackMap,
+        ),
       };
     });
 
@@ -2834,7 +3007,6 @@ describe('ReactFlightDOM', () => {
     expect(getMeaningfulChildren(container)).toEqual(<div>hello world</div>);
   });
 
-  // @gate enableHalt
   it('does not propagate abort reasons errors when aborting a prerender', async () => {
     let resolveGreeting;
     const greetingPromise = new Promise(resolve => {
@@ -2861,21 +3033,22 @@ describe('ReactFlightDOM', () => {
     const {pendingResult} = await serverAct(async () => {
       // destructure trick to avoid the act scope from awaiting the returned value
       return {
-        pendingResult:
-          ReactServerDOMStaticServer.unstable_prerenderToNodeStream(
-            <App />,
-            webpackMap,
-            {
-              signal: controller.signal,
-              onError(err) {
-                errors.push(err);
-              },
+        pendingResult: ReactServerDOMStaticServer.prerenderToNodeStream(
+          <App />,
+          webpackMap,
+          {
+            signal: controller.signal,
+            onError(err) {
+              errors.push(err);
             },
-          ),
+          },
+        ),
       };
     });
 
-    controller.abort('boom');
+    await serverAct(() => {
+      controller.abort('boom');
+    });
     resolveGreeting();
     const {prelude} = await pendingResult;
 
@@ -2916,7 +3089,6 @@ describe('ReactFlightDOM', () => {
     expect(getMeaningfulChildren(container)).toEqual(<div>loading...</div>);
   });
 
-  // @gate enableHalt
   it('will leave async iterables in an incomplete state when halting', async () => {
     let resolve;
     const wait = new Promise(r => (resolve = r));
@@ -2934,19 +3106,18 @@ describe('ReactFlightDOM', () => {
     const controller = new AbortController();
     const {pendingResult} = await serverAct(() => {
       return {
-        pendingResult:
-          ReactServerDOMStaticServer.unstable_prerenderToNodeStream(
-            {
-              multiShotIterable,
+        pendingResult: ReactServerDOMStaticServer.prerenderToNodeStream(
+          {
+            multiShotIterable,
+          },
+          {},
+          {
+            onError(x) {
+              errors.push(x);
             },
-            {},
-            {
-              onError(x) {
-                errors.push(x);
-              },
-              signal: controller.signal,
-            },
-          ),
+            signal: controller.signal,
+          },
+        ),
       };
     });
 
@@ -2956,7 +3127,7 @@ describe('ReactFlightDOM', () => {
     const {prelude} = await pendingResult;
 
     const result = await ReactServerDOMClient.createFromReadableStream(
-      Readable.toWeb(prelude),
+      createUnclosingStream(Readable.toWeb(prelude)),
     );
 
     const iterator = result.multiShotIterable[Symbol.asyncIterator]();
@@ -2976,7 +3147,6 @@ describe('ReactFlightDOM', () => {
     expect(await race).toBe('timeout');
   });
 
-  // @gate enableHalt
   it('will halt unfinished chunks inside Suspense when aborting a prerender', async () => {
     const controller = new AbortController();
     function ComponentThatAborts() {
@@ -3018,17 +3188,16 @@ describe('ReactFlightDOM', () => {
     const errors = [];
     const {pendingResult} = await serverAct(() => {
       return {
-        pendingResult:
-          ReactServerDOMStaticServer.unstable_prerenderToNodeStream(
-            <App />,
-            {},
-            {
-              onError(x) {
-                errors.push(x);
-              },
-              signal: controller.signal,
+        pendingResult: ReactServerDOMStaticServer.prerenderToNodeStream(
+          <App />,
+          {},
+          {
+            onError(x) {
+              errors.push(x);
             },
-          ),
+            signal: controller.signal,
+          },
+        ),
       };
     });
 
