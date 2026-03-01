@@ -113,7 +113,7 @@ describe('ReactDOMServerPartialHydration', () => {
     act = require('internal-test-utils').act;
     ReactDOMServer = require('react-dom/server');
     Scheduler = require('scheduler');
-    Activity = React.unstable_Activity;
+    Activity = React.Activity;
     Suspense = React.Suspense;
     useSyncExternalStore = React.useSyncExternalStore;
     if (gate(flags => flags.enableSuspenseList)) {
@@ -1922,7 +1922,7 @@ describe('ReactDOMServerPartialHydration', () => {
       assertConsoleErrorDev([
         "Can't perform a React state update on a component that hasn't mounted yet. " +
           'This indicates that you have a side-effect in your render function that ' +
-          'asynchronously later calls tries to update the component. Move this work to useEffect instead.\n' +
+          'asynchronously tries to update the component. Move this work to useEffect instead.\n' +
           '    in App (at **)',
       ]);
 
@@ -2022,7 +2022,7 @@ describe('ReactDOMServerPartialHydration', () => {
     expect(span.className).toBe('hi');
   });
 
-  it('shows the fallback if context has changed before hydration completes and is still suspended', async () => {
+  it('preserves server HTML for a resolved dehydrated boundary when context changes while still suspended', async () => {
     let suspend = false;
     let resolve;
     const promise = new Promise(resolvePromise => (resolve = resolvePromise));
@@ -2083,7 +2083,9 @@ describe('ReactDOMServerPartialHydration', () => {
     expect(ref.current).toBe(null);
 
     // Render an update, but leave it still suspended.
-    // Flushing now should delete the existing content and show the fallback.
+    // Since this is a resolved dehydrated boundary (server sent complete HTML),
+    // we keep the dehydrated content in place rather than switching to
+    // client rendering of the fallback.
     await act(() => {
       root.render(
         <Context.Provider value={{text: 'Hi', className: 'hi'}}>
@@ -2092,11 +2094,11 @@ describe('ReactDOMServerPartialHydration', () => {
       );
     });
 
-    expect(container.getElementsByTagName('span').length).toBe(0);
-    expect(ref.current).toBe(null);
-    expect(container.textContent).toBe('Loading...');
+    // Server HTML is preserved.
+    expect(container.getElementsByTagName('span').length).toBe(1);
+    expect(container.getElementsByTagName('span')[0].textContent).toBe('Hello');
 
-    // Unsuspending shows the content.
+    // Unsuspending shows the content with the updated context.
     await act(async () => {
       suspend = false;
       resolve();
@@ -2362,7 +2364,7 @@ describe('ReactDOMServerPartialHydration', () => {
 
     function App({showMore}) {
       return (
-        <SuspenseList revealOrder="forwards">
+        <SuspenseList revealOrder="forwards" tail="visible">
           {a}
           {b}
           {showMore ? (
@@ -3668,7 +3670,6 @@ describe('ReactDOMServerPartialHydration', () => {
     expect(ref.current.innerHTML).toBe('Hidden child');
   });
 
-  // @gate enableActivity
   it('a visible Activity component is surrounded by comment markers', async () => {
     const ref = React.createRef();
 
@@ -3706,7 +3707,6 @@ describe('ReactDOMServerPartialHydration', () => {
     expect(ref.current).toBe(span);
   });
 
-  // @gate enableActivity
   it('a hidden Activity component is skipped over during server rendering', async () => {
     const visibleRef = React.createRef();
 
@@ -3913,7 +3913,6 @@ describe('ReactDOMServerPartialHydration', () => {
     );
   });
 
-  // @gate favorSafetyOverHydrationPerf
   it("falls back to client rendering when there's a text mismatch (direct text child)", async () => {
     function DirectTextChild({text}) {
       return <div>{text}</div>;
@@ -3937,7 +3936,6 @@ describe('ReactDOMServerPartialHydration', () => {
     ]);
   });
 
-  // @gate favorSafetyOverHydrationPerf
   it("falls back to client rendering when there's a text mismatch (text child with siblings)", async () => {
     function Sibling() {
       return 'Sibling';
@@ -4064,5 +4062,377 @@ describe('ReactDOMServerPartialHydration', () => {
     expect(span.textContent).toBe('World');
     expect(span.style.display).toBe('');
     expect(ref.current).toBe(span);
+  });
+
+  // Regression for https://github.com/facebook/react/issues/35210 and other issues where lazy elements created in flight
+  // caused hydration issues b/c the replay pathway did not correctly reset the hydration cursor
+  it('Can hydrate even when lazy content resumes immediately inside a HostComponent', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: 'value'});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return <label>{lazyContent}</label>;
+    }
+
+    // Server-rendered HTML
+    const container = document.createElement('div');
+    container.innerHTML = '<label>value</label>';
+
+    const hydrationErrors = [];
+
+    React.startTransition(() => {
+      ReactDOMClient.hydrateRoot(container, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    // Without the fix, hydration cursor is wrong and causes mismatch
+    expect(hydrationErrors).toEqual([]);
+    expect(container.innerHTML).toEqual('<label>value</label>');
+  });
+
+  it('Can hydrate even when lazy content resumes immediately inside a HostSingleton', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: <div>value</div>});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return (
+        <html>
+          <body>{lazyContent}</body>
+        </html>
+      );
+    }
+
+    // Server-rendered HTML
+    document.body.innerHTML = '<div>value</div>';
+
+    const hydrationErrors = [];
+
+    React.startTransition(() => {
+      ReactDOMClient.hydrateRoot(document, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    expect(hydrationErrors).toEqual([]);
+    expect(document.documentElement.outerHTML).toEqual(
+      '<html><head></head><body><div>value</div></body></html>',
+    );
+  });
+
+  it('Can hydrate even when lazy content resumes immediately inside a Suspense', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: 'value'});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return <Suspense>{lazyContent}</Suspense>;
+    }
+
+    // Server-rendered HTML
+    const container = document.createElement('div');
+    container.innerHTML = '<!--$-->value<!--/$-->';
+
+    const hydrationErrors = [];
+
+    let root;
+    React.startTransition(() => {
+      root = ReactDOMClient.hydrateRoot(container, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    expect(hydrationErrors).toEqual([]);
+    expect(container.innerHTML).toEqual('<!--$-->value<!--/$-->');
+    root.unmount();
+    expect(container.innerHTML).toEqual('<!--$--><!--/$-->');
+  });
+
+  it('Can hydrate even when lazy content resumes immediately inside an Activity', async () => {
+    let resolve;
+    const promise = new Promise(r => {
+      resolve = () => r({default: 'value'});
+    });
+
+    const lazyContent = React.lazy(() => {
+      Scheduler.log('Lazy initializer called');
+      return promise;
+    });
+
+    function App() {
+      return <Activity mode="visible">{lazyContent}</Activity>;
+    }
+
+    // Server-rendered HTML
+    const container = document.createElement('div');
+    container.innerHTML = '<!--&-->value<!--/&-->';
+
+    const hydrationErrors = [];
+
+    let root;
+    React.startTransition(() => {
+      root = ReactDOMClient.hydrateRoot(container, <App />, {
+        onRecoverableError(error) {
+          console.log('[DEBUG] hydration error:', error.message);
+          hydrationErrors.push(error.message);
+        },
+      });
+    });
+
+    await waitFor(['Lazy initializer called']);
+    resolve();
+    await waitForAll([]);
+
+    expect(hydrationErrors).toEqual([]);
+    expect(container.innerHTML).toEqual('<!--&-->value<!--/&-->');
+    root.unmount();
+    expect(container.innerHTML).toEqual('<!--&--><!--/&-->');
+  });
+
+  // Regression test for https://github.com/facebook/react/issues/22692
+  // When a context change propagates through a memoized subtree containing a
+  // resolved dehydrated Suspense boundary with a suspended child, the boundary
+  // should not be destroyed and re-rendered client-side.
+  it('does not destroy a resolved dehydrated Suspense boundary when context changes propagate through memo', async () => {
+    let suspend = false;
+    let resolve;
+    const promise = new Promise(resolvePromise => (resolve = resolvePromise));
+    const Context = React.createContext(0);
+
+    const hydrationErrors = [];
+
+    let setContextValue;
+    function ContextProvider({children}) {
+      const [value, setValue] = React.useState(0);
+      setContextValue = setValue;
+      return <Context.Provider value={value}>{children}</Context.Provider>;
+    }
+
+    // The memo wrapper is critical: it causes the context propagation code
+    // to walk the fiber tree looking for context consumers, which encounters
+    // the DehydratedFragment and (before the fix) incorrectly marked the
+    // parent Suspense boundary as needing work.
+    const MemoWrapper = React.memo(function MemoWrapper({children}) {
+      return children;
+    });
+
+    function Child() {
+      if (suspend) {
+        throw promise;
+      }
+      Scheduler.log('Child rendered');
+      return <span>Content</span>;
+    }
+
+    function App() {
+      const memoizedChildren = React.useMemo(
+        () => (
+          <Suspense fallback="Loading...">
+            <Child />
+          </Suspense>
+        ),
+        [],
+      );
+      return (
+        <ContextProvider>
+          <MemoWrapper>{memoizedChildren}</MemoWrapper>
+        </ContextProvider>
+      );
+    }
+
+    // Server render produces resolved Suspense boundaries (<!--$-->)
+    suspend = false;
+    const finalHTML = ReactDOMServer.renderToString(<App />);
+    assertLog(['Child rendered']);
+
+    const container = document.createElement('div');
+    container.innerHTML = finalHTML;
+
+    const originalSpan = container.getElementsByTagName('span')[0];
+    expect(originalSpan.textContent).toBe('Content');
+
+    // Hydrate. The child suspends on the client, so the Suspense boundary
+    // remains dehydrated.
+    suspend = true;
+    ReactDOMClient.hydrateRoot(container, <App />, {
+      onRecoverableError(error) {
+        hydrationErrors.push(normalizeError(error.message));
+      },
+    });
+
+    // The child renders during hydration but suspends.
+    await waitForAll([]);
+
+    // The server HTML should still be visible.
+    expect(container.getElementsByTagName('span')[0].textContent).toBe(
+      'Content',
+    );
+
+    // Trigger a context change. This causes propagateContextChanges to walk
+    // through the memo boundary and encounter the DehydratedFragment. Before
+    // the fix, this would mark the Suspense boundary's lanes, leading to
+    // SelectiveHydrationException, lane exhaustion, and eventually
+    // retrySuspenseComponentWithoutHydrating which destroys the server HTML.
+    await act(() => {
+      setContextValue(1);
+    });
+
+    // The server HTML should still be intact — no fallback should appear.
+    expect(container.getElementsByTagName('span')[0].textContent).toBe(
+      'Content',
+    );
+    // The original span should be the same DOM node (not re-created)
+    expect(container.getElementsByTagName('span')[0]).toBe(originalSpan);
+
+    // Now resolve the suspended child and let hydration complete
+    await act(async () => {
+      suspend = false;
+      resolve();
+      await promise;
+    });
+    assertLog(['Child rendered']);
+
+    // After hydration completes, the content should still be the same
+    expect(container.getElementsByTagName('span')[0].textContent).toBe(
+      'Content',
+    );
+    expect(container.getElementsByTagName('span')[0]).toBe(originalSpan);
+
+    expect(hydrationErrors).toEqual([]);
+  });
+
+  // Regression test: same as above but the context consumer is inside the
+  // Suspense boundary. The context update happens before hydration completes,
+  // so the server-rendered text won't match once the boundary hydrates.
+  it('preserves server HTML when context changes before hydration completes, and applies updated context after hydration', async () => {
+    let suspend = false;
+    let resolve;
+    const promise = new Promise(resolvePromise => (resolve = resolvePromise));
+    const Context = React.createContext('initial');
+
+    const hydrationErrors = [];
+
+    let setContextValue;
+    function ContextProvider({children}) {
+      const [value, setValue] = React.useState('initial');
+      setContextValue = setValue;
+      return <Context.Provider value={value}>{children}</Context.Provider>;
+    }
+
+    const MemoWrapper = React.memo(function MemoWrapper({children}) {
+      return children;
+    });
+
+    function Child() {
+      const ctx = React.useContext(Context);
+      if (suspend) {
+        throw promise;
+      }
+      return <span>{ctx}</span>;
+    }
+
+    function App() {
+      const memoizedChildren = React.useMemo(
+        () => (
+          <Suspense fallback="Loading...">
+            <Child />
+          </Suspense>
+        ),
+        [],
+      );
+      return (
+        <ContextProvider>
+          <MemoWrapper>{memoizedChildren}</MemoWrapper>
+        </ContextProvider>
+      );
+    }
+
+    // Server render
+    suspend = false;
+    const finalHTML = ReactDOMServer.renderToString(<App />);
+
+    const container = document.createElement('div');
+    container.innerHTML = finalHTML;
+
+    expect(container.getElementsByTagName('span')[0].textContent).toBe(
+      'initial',
+    );
+
+    // Hydrate — child suspends on client
+    suspend = true;
+    ReactDOMClient.hydrateRoot(container, <App />, {
+      onRecoverableError(error) {
+        hydrationErrors.push(normalizeError(error.message));
+      },
+    });
+
+    await waitForAll([]);
+
+    // Change context before child resolves
+    await act(() => {
+      setContextValue('updated');
+    });
+
+    // Server HTML should still be visible (not destroyed)
+    expect(container.getElementsByTagName('span')[0].textContent).toBe(
+      'initial',
+    );
+
+    // Now resolve and let hydration complete
+    await act(async () => {
+      suspend = false;
+      resolve();
+      await promise;
+    });
+
+    // After hydration, the component should render with the updated context
+    expect(container.getElementsByTagName('span')[0].textContent).toBe(
+      'updated',
+    );
+
+    expect(hydrationErrors).toEqual([
+      "Hydration failed because the server rendered text didn't match the client.",
+    ]);
   });
 });
