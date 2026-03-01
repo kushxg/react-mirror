@@ -244,15 +244,12 @@ describe('ReactHooks', () => {
         throw new Error('Expected to ignore the callback.');
       }),
     );
-    assertConsoleErrorDev(
-      [
-        'State updates from the useState() and useReducer() Hooks ' +
-          "don't support the second callback argument. " +
-          'To execute a side effect after rendering, ' +
-          'declare it in the component body with useEffect().',
-      ],
-      {withoutStack: true},
-    );
+    assertConsoleErrorDev([
+      'State updates from the useState() and useReducer() Hooks ' +
+        "don't support the second callback argument. " +
+        'To execute a side effect after rendering, ' +
+        'declare it in the component body with useEffect().',
+    ]);
     assertLog(['Count: 1']);
     expect(root).toMatchRenderedOutput('1');
   });
@@ -279,15 +276,12 @@ describe('ReactHooks', () => {
         throw new Error('Expected to ignore the callback.');
       }),
     );
-    assertConsoleErrorDev(
-      [
-        'State updates from the useState() and useReducer() Hooks ' +
-          "don't support the second callback argument. " +
-          'To execute a side effect after rendering, ' +
-          'declare it in the component body with useEffect().',
-      ],
-      {withoutStack: true},
-    );
+    assertConsoleErrorDev([
+      'State updates from the useState() and useReducer() Hooks ' +
+        "don't support the second callback argument. " +
+        'To execute a side effect after rendering, ' +
+        'declare it in the component body with useEffect().',
+    ]);
     assertLog(['Count: 1']);
     expect(root).toMatchRenderedOutput('1');
   });
@@ -593,6 +587,33 @@ describe('ReactHooks', () => {
         '\n' +
         'Previous: [A]\n' +
         'Incoming: [A, B]\n' +
+        '    in App (at **)',
+    ]);
+  });
+
+  it('warns about variable number of dependencies when deps contain Symbols', async () => {
+    const {useLayoutEffect} = React;
+    const sym = Symbol('testSymbol');
+    function App(props) {
+      useLayoutEffect(() => {}, props.dependencies);
+      return null;
+    }
+    let root;
+    await act(() => {
+      root = ReactTestRenderer.create(<App dependencies={[sym]} />, {
+        unstable_isConcurrent: true,
+      });
+    });
+    await act(() => {
+      root.update(<App dependencies={[sym, 'extra']} />);
+    });
+    assertConsoleErrorDev([
+      'The final argument passed to useLayoutEffect changed size ' +
+        'between renders. The order and size of this array must remain ' +
+        'constant.\n' +
+        '\n' +
+        'Previous: [Symbol(testSymbol)]\n' +
+        'Incoming: [Symbol(testSymbol), extra]\n' +
         '    in App (at **)',
     ]);
   });
@@ -1589,17 +1610,15 @@ describe('ReactHooks', () => {
       useStateHelper,
     ];
 
-    if (__EXPERIMENTAL__) {
-      const useTransitionHelper = () => React.useTransition();
-      const useDeferredValueHelper = () =>
-        React.useDeferredValue(0, {timeoutMs: 1000});
+    const useTransitionHelper = () => React.useTransition();
+    const useDeferredValueHelper = () =>
+      React.useDeferredValue(0, {timeoutMs: 1000});
 
-      orderedHooks.push(useTransitionHelper);
-      orderedHooks.push(useDeferredValueHelper);
+    orderedHooks.push(useTransitionHelper);
+    orderedHooks.push(useDeferredValueHelper);
 
-      hooksInList.push(useTransitionHelper);
-      hooksInList.push(useDeferredValueHelper);
-    }
+    hooksInList.push(useTransitionHelper);
+    hooksInList.push(useDeferredValueHelper);
 
     const formatHookNamesToMatchErrorMessage = (hookNameA, hookNameB) => {
       return `use${hookNameA}${' '.repeat(24 - hookNameA.length)}${
