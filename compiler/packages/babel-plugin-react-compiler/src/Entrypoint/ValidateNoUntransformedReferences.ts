@@ -8,102 +8,11 @@
 import {NodePath} from '@babel/core';
 import * as t from '@babel/types';
 
-import {
-  CompilerError,
-  CompilerErrorDetailOptions,
-  EnvironmentConfig,
-  ErrorSeverity,
-  Logger,
-} from '..';
+import {CompilerError, EnvironmentConfig, Logger} from '..';
 import {getOrInsertWith} from '../Utils/utils';
-import {Environment} from '../HIR';
+import {GeneratedSource} from '../HIR';
 import {DEFAULT_EXPORT} from '../HIR/Environment';
 import {CompileProgramMetadata} from './Program';
-
-function throwInvalidReact(
-  options: Omit<CompilerErrorDetailOptions, 'severity'>,
-  {logger, filename}: TraversalState,
-): never {
-  const detail: CompilerErrorDetailOptions = {
-    ...options,
-    severity: ErrorSeverity.InvalidReact,
-  };
-  logger?.logEvent(filename, {
-    kind: 'CompileError',
-    fnLoc: null,
-    detail,
-  });
-  CompilerError.throw(detail);
-}
-function assertValidEffectImportReference(
-  numArgs: number,
-  paths: Array<NodePath<t.Node>>,
-  context: TraversalState,
-): void {
-  for (const path of paths) {
-    const parent = path.parentPath;
-    if (parent != null && parent.isCallExpression()) {
-      const args = parent.get('arguments');
-      const maybeCalleeLoc = path.node.loc;
-      const hasInferredEffect =
-        maybeCalleeLoc != null &&
-        context.inferredEffectLocations.has(maybeCalleeLoc);
-      /**
-       * Only error on untransformed references of the form `useMyEffect(...)`
-       * or `moduleNamespace.useMyEffect(...)`, with matching argument counts.
-       * TODO: do we also want a mode to also hard error on non-call references?
-       */
-      if (args.length === numArgs && !hasInferredEffect) {
-        const maybeErrorDiagnostic = matchCompilerDiagnostic(
-          path,
-          context.transformErrors,
-        );
-        /**
-         * Note that we cannot easily check the type of the first argument here,
-         * as it may have already been transformed by the compiler (and not
-         * memoized).
-         */
-        throwInvalidReact(
-          {
-            reason:
-              '[InferEffectDependencies] React Compiler is unable to infer dependencies of this effect. ' +
-              'This will break your build! ' +
-              'To resolve, either pass your own dependency array or fix reported compiler bailout diagnostics.',
-            description: maybeErrorDiagnostic
-              ? `(Bailout reason: ${maybeErrorDiagnostic})`
-              : null,
-            loc: parent.node.loc ?? null,
-          },
-          context,
-        );
-      }
-    }
-  }
-}
-
-function assertValidFireImportReference(
-  paths: Array<NodePath<t.Node>>,
-  context: TraversalState,
-): void {
-  if (paths.length > 0) {
-    const maybeErrorDiagnostic = matchCompilerDiagnostic(
-      paths[0],
-      context.transformErrors,
-    );
-    throwInvalidReact(
-      {
-        reason:
-          '[Fire] Untransformed reference to compiler-required feature. ' +
-          'Either remove this `fire` call or ensure it is successfully transformed by the compiler',
-        description: maybeErrorDiagnostic
-          ? `(Bailout reason: ${maybeErrorDiagnostic})`
-          : null,
-        loc: paths[0].node.loc ?? null,
-      },
-      context,
-    );
-  }
-}
 export default function validateNoUntransformedReferences(
   path: NodePath<t.Program>,
   filename: string | null,
@@ -115,28 +24,6 @@ export default function validateNoUntransformedReferences(
     string,
     Map<string, CheckInvalidReferenceFn>
   >();
-  if (env.enableFire) {
-    /**
-     * Error on any untransformed references to `fire` (e.g. including non-call
-     * expressions)
-     */
-    for (const module of Environment.knownReactModules) {
-      const react = getOrInsertWith(moduleLoadChecks, module, () => new Map());
-      react.set('fire', assertValidFireImportReference);
-    }
-  }
-  if (env.inferEffectDependencies) {
-    for (const {
-      function: {source, importSpecifierName},
-      numRequiredArgs,
-    } of env.inferEffectDependencies) {
-      const module = getOrInsertWith(moduleLoadChecks, source, () => new Map());
-      module.set(
-        importSpecifierName,
-        assertValidEffectImportReference.bind(null, numRequiredArgs),
-      );
-    }
-  }
   if (moduleLoadChecks.size > 0) {
     transformProgram(path, moduleLoadChecks, filename, logger, compileResult);
   }
@@ -148,7 +35,6 @@ type TraversalState = {
   logger: Logger | null;
   filename: string | null;
   transformErrors: Array<{fn: NodePath<t.Node>; error: CompilerError}>;
-  inferredEffectLocations: Set<t.SourceLocation>;
 };
 type CheckInvalidReferenceFn = (
   paths: Array<NodePath<t.Node>>,
@@ -178,7 +64,7 @@ function validateImportSpecifier(
   const binding = local.scope.getBinding(local.node.name);
   CompilerError.invariant(binding != null, {
     reason: 'Expected binding to be found for import specifier',
-    loc: local.node.loc ?? null,
+    loc: local.node.loc ?? GeneratedSource,
   });
   checkFn(binding.referencePaths, state);
 }
@@ -198,7 +84,7 @@ function validateNamespacedImport(
 
   CompilerError.invariant(binding != null, {
     reason: 'Expected binding to be found for import specifier',
-    loc: local.node.loc ?? null,
+    loc: local.node.loc ?? GeneratedSource,
   });
   const filteredReferences = new Map<
     CheckInvalidReferenceFn,
@@ -244,8 +130,6 @@ function transformProgram(
     filename,
     logger,
     transformErrors: compileResult?.retryErrors ?? [],
-    inferredEffectLocations:
-      compileResult?.inferredEffectLocations ?? new Set(),
   };
   path.traverse({
     ImportDeclaration(path: NodePath<t.ImportDeclaration>) {
@@ -275,16 +159,4 @@ function transformProgram(
       }
     },
   });
-}
-
-function matchCompilerDiagnostic(
-  badReference: NodePath<t.Node>,
-  transformErrors: Array<{fn: NodePath<t.Node>; error: CompilerError}>,
-): string | null {
-  for (const {fn, error} of transformErrors) {
-    if (fn.isAncestor(badReference)) {
-      return error.toString();
-    }
-  }
-  return null;
 }
