@@ -11,11 +11,9 @@ import escapeStringRegExp from 'escape-string-regexp';
 import {meta} from '../../hydration';
 import {formatDataForPreview} from '../../utils';
 import isArray from 'react-devtools-shared/src/isArray';
+import hasOwnProperty from 'shared/hasOwnProperty';
 
 import type {HooksTree} from 'react-debug-tools/src/ReactDebugHooks';
-
-// $FlowFixMe[method-unbinding]
-const hasOwnProperty = Object.prototype.hasOwnProperty;
 
 export function alphaSortEntries(
   entryA: [string, mixed],
@@ -121,7 +119,7 @@ function sanitize(data: Object): void {
 }
 
 export function serializeDataForCopy(props: Object): string {
-  const cloned = Object.assign({}, props);
+  const cloned = isArray(props) ? props.slice(0) : Object.assign({}, props);
 
   sanitize(cloned);
 
@@ -197,4 +195,61 @@ export function truncateText(text: string, maxLength: number): string {
   } else {
     return text;
   }
+}
+
+export function pluralize(word: string): string {
+  if (!/^[a-z]+$/i.test(word)) {
+    // If it's not a single a-z word, give up.
+    return word;
+  }
+
+  // Bail out if it's already plural.
+  switch (word) {
+    case 'men':
+    case 'women':
+    case 'children':
+    case 'feet':
+    case 'teeth':
+    case 'mice':
+    case 'people':
+      return word;
+  }
+
+  if (
+    /(ches|shes|ses|xes|zes)$/i.test(word) ||
+    /[^s]ies$/i.test(word) ||
+    /ves$/i.test(word) ||
+    /[^s]s$/i.test(word)
+  ) {
+    return word;
+  }
+
+  switch (word) {
+    case 'man':
+      return 'men';
+    case 'woman':
+      return 'women';
+    case 'child':
+      return 'children';
+    case 'foot':
+      return 'feet';
+    case 'tooth':
+      return 'teeth';
+    case 'mouse':
+      return 'mice';
+    case 'person':
+      return 'people';
+  }
+
+  // Words ending in s, x, z, ch, sh → add "es"
+  if (/(s|x|z|ch|sh)$/i.test(word)) return word + 'es';
+
+  // Words ending in consonant + y → replace y with "ies"
+  if (/[bcdfghjklmnpqrstvwxz]y$/i.test(word)) return word.slice(0, -1) + 'ies';
+
+  // Words ending in f or fe → replace with "ves"
+  if (/(?:f|fe)$/i.test(word)) return word.replace(/(?:f|fe)$/i, 'ves');
+
+  // Default: just add "s"
+  return word + 's';
 }
