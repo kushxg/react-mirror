@@ -104,6 +104,16 @@ const ReactNoopServer = ReactFizzServer({
   getChildFormatContext(): null {
     return null;
   },
+  getSuspenseFallbackFormatContext(): null {
+    return null;
+  },
+  getSuspenseContentFormatContext(): null {
+    return null;
+  },
+
+  getViewTransitionFormatContext(): null {
+    return null;
+  },
 
   resetResumableState(): void {},
   completeResumableState(): void {},
@@ -314,6 +324,12 @@ const ReactNoopServer = ReactFizzServer({
   writeHoistablesForBoundary() {},
   writePostamble() {},
   hoistHoistables(parent: HoistableState, child: HoistableState) {},
+  hasSuspenseyContent(
+    hoistableState: HoistableState,
+    flushingInShell: boolean,
+  ): boolean {
+    return false;
+  },
   createHoistableState(): HoistableState {
     return null;
   },
@@ -352,6 +368,7 @@ function render(children: React$Element<any>, options?: Options): Destination {
   };
   const request = ReactNoopServer.createRequest(
     children,
+    null,
     null,
     null,
     options ? options.progressiveChunkSize : undefined,
