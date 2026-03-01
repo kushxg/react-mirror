@@ -6,13 +6,9 @@
  */
 
 import * as t from '@babel/types';
-import {
-  CompilerError,
-  CompilerErrorDetail,
-  ErrorSeverity,
-} from '../CompilerError';
+import {CompilerErrorDetail, ErrorCategory} from '../CompilerError';
 import {computeUnconditionalBlocks} from '../HIR/ComputeUnconditionalBlocks';
-import {isHookName} from '../HIR/Environment';
+import {Environment, isHookName} from '../HIR/Environment';
 import {
   HIRFunction,
   IdentifierId,
@@ -26,7 +22,6 @@ import {
   eachTerminalOperand,
 } from '../HIR/visitors';
 import {assertExhaustive} from '../Utils/utils';
-import {Result} from '../Utils/Result';
 
 /**
  * Represents the possible kinds of value which may be stored at a given Place during
@@ -88,20 +83,17 @@ function joinKinds(a: Kind, b: Kind): Kind {
  *   may not appear as the callee of a conditional call.
  *   See the note for Kind.PotentialHook for sources of potential hooks
  */
-export function validateHooksUsage(
-  fn: HIRFunction,
-): Result<void, CompilerError> {
+export function validateHooksUsage(fn: HIRFunction): void {
   const unconditionalBlocks = computeUnconditionalBlocks(fn);
 
-  const errors = new CompilerError();
   const errorsByPlace = new Map<t.SourceLocation, CompilerErrorDetail>();
 
-  function recordError(
+  function trackError(
     loc: SourceLocation,
     errorDetail: CompilerErrorDetail,
   ): void {
     if (typeof loc === 'symbol') {
-      errors.pushErrorDetail(errorDetail);
+      fn.env.recordError(errorDetail);
     } else {
       errorsByPlace.set(loc, errorDetail);
     }
@@ -121,13 +113,13 @@ export function validateHooksUsage(
      * If that same place is also used as a conditional call, upgrade the error to a conditonal hook error
      */
     if (previousError === undefined || previousError.reason !== reason) {
-      recordError(
+      trackError(
         place.loc,
         new CompilerErrorDetail({
+          category: ErrorCategory.Hooks,
           description: null,
           reason,
           loc: place.loc,
-          severity: ErrorSeverity.InvalidReact,
           suggestions: null,
         }),
       );
@@ -137,14 +129,14 @@ export function validateHooksUsage(
     const previousError =
       typeof place.loc !== 'symbol' ? errorsByPlace.get(place.loc) : undefined;
     if (previousError === undefined) {
-      recordError(
+      trackError(
         place.loc,
         new CompilerErrorDetail({
+          category: ErrorCategory.Hooks,
           description: null,
           reason:
             'Hooks may not be referenced as normal values, they must be called. See https://react.dev/reference/rules/react-calls-components-and-hooks#never-pass-around-hooks-as-regular-values',
           loc: place.loc,
-          severity: ErrorSeverity.InvalidReact,
           suggestions: null,
         }),
       );
@@ -154,19 +146,28 @@ export function validateHooksUsage(
     const previousError =
       typeof place.loc !== 'symbol' ? errorsByPlace.get(place.loc) : undefined;
     if (previousError === undefined) {
-      recordError(
+      trackError(
         place.loc,
         new CompilerErrorDetail({
+          category: ErrorCategory.Hooks,
           description: null,
           reason:
             'Hooks must be the same function on every render, but this value may change over time to a different function. See https://react.dev/reference/rules/react-calls-components-and-hooks#dont-dynamically-use-hooks',
           loc: place.loc,
-          severity: ErrorSeverity.InvalidReact,
           suggestions: null,
         }),
       );
     }
   }
+
+  /**
+   * Track identifiers that were loaded from module imports (ImportDefault,
+   * ImportNamespace, ImportSpecifier) but whose type is unresolved. These
+   * represent third-party module imports where the type system doesn't know
+   * the actual types. Used to avoid false hook detection on method calls
+   * like `amCharts.useTheme()`. See #32109.
+   */
+  const untypedImportIdentifiers = new Set<IdentifierId>();
 
   const valueKinds = new Map<IdentifierId, Kind>();
   function getKindForPlace(place: Place): Kind {
@@ -231,6 +232,20 @@ export function validateHooksUsage(
             setKind(instr.lvalue, Kind.KnownHook);
           } else {
             setKind(instr.lvalue, Kind.Global);
+          }
+          /*
+           * Track identifiers from module imports with unresolved types,
+           * used to skip heuristic hook detection on method calls. See #32109.
+           */
+          const binding = instr.value.binding;
+          if (
+            (binding.kind === 'ImportDefault' ||
+              binding.kind === 'ImportNamespace' ||
+              binding.kind === 'ImportSpecifier') &&
+            instr.lvalue.identifier.type.kind !== 'Object' &&
+            instr.lvalue.identifier.type.kind !== 'Function'
+          ) {
+            untypedImportIdentifiers.add(instr.lvalue.identifier.id);
           }
           break;
         }
@@ -339,11 +354,33 @@ export function validateHooksUsage(
         }
         case 'MethodCall': {
           const calleeKind = getKindForPlace(instr.value.property);
+          /**
+           * For method calls where the receiver is a non-React module import
+           * with an unresolved type, hook-named properties were typed
+           * heuristically based on naming alone. We skip hook validation for
+           * these cases to avoid false positives with third-party APIs like
+           * `amCharts.useTheme()` that happen to use "use*" naming but are
+           * not React hooks. See https://github.com/facebook/react/issues/32109
+           */
+          const receiverType = instr.value.receiver.identifier.type;
+          const isReceiverUntyped =
+            receiverType.kind !== 'Object' &&
+            receiverType.kind !== 'Function';
+          const isReceiverImport =
+            untypedImportIdentifiers.has(
+              instr.value.receiver.identifier.id,
+            );
+          const skipHookCheck = isReceiverUntyped && isReceiverImport;
           const isHookCallee =
-            calleeKind === Kind.KnownHook || calleeKind === Kind.PotentialHook;
+            !skipHookCheck &&
+            (calleeKind === Kind.KnownHook ||
+              calleeKind === Kind.PotentialHook);
           if (isHookCallee && !unconditionalBlocks.has(block.id)) {
             recordConditionalHookError(instr.value.property);
-          } else if (calleeKind === Kind.PotentialHook) {
+          } else if (
+            !skipHookCheck &&
+            calleeKind === Kind.PotentialHook
+          ) {
             recordDynamicHookUsageError(instr.value.property);
           }
           /*
@@ -399,7 +436,7 @@ export function validateHooksUsage(
         }
         case 'ObjectMethod':
         case 'FunctionExpression': {
-          visitFunctionExpression(errors, instr.value.loweredFunc.func);
+          visitFunctionExpression(fn.env, instr.value.loweredFunc.func);
           break;
         }
         default: {
@@ -424,18 +461,17 @@ export function validateHooksUsage(
   }
 
   for (const [, error] of errorsByPlace) {
-    errors.push(error);
+    fn.env.recordError(error);
   }
-  return errors.asResult();
 }
 
-function visitFunctionExpression(errors: CompilerError, fn: HIRFunction): void {
+function visitFunctionExpression(env: Environment, fn: HIRFunction): void {
   for (const [, block] of fn.body.blocks) {
     for (const instr of block.instructions) {
       switch (instr.value.kind) {
         case 'ObjectMethod':
         case 'FunctionExpression': {
-          visitFunctionExpression(errors, instr.value.loweredFunc.func);
+          visitFunctionExpression(env, instr.value.loweredFunc.func);
           break;
         }
         case 'MethodCall':
@@ -444,15 +480,28 @@ function visitFunctionExpression(errors: CompilerError, fn: HIRFunction): void {
             instr.value.kind === 'CallExpression'
               ? instr.value.callee
               : instr.value.property;
+          /**
+           * For MethodCall on untyped Global receivers, skip hook validation
+           * as the property was typed heuristically. See #32109.
+           */
+          if (instr.value.kind === 'MethodCall') {
+            const receiverType = instr.value.receiver.identifier.type;
+            if (
+              receiverType.kind !== 'Object' &&
+              receiverType.kind !== 'Function'
+            ) {
+              break;
+            }
+          }
           const hookKind = getHookKind(fn.env, callee.identifier);
           if (hookKind != null) {
-            errors.pushErrorDetail(
+            env.recordError(
               new CompilerErrorDetail({
-                severity: ErrorSeverity.InvalidReact,
+                category: ErrorCategory.Hooks,
                 reason:
                   'Hooks must be called at the top level in the body of a function component or custom hook, and may not be called within function expressions. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning)',
                 loc: callee.loc,
-                description: `Cannot call ${hookKind} within a function component`,
+                description: `Cannot call ${hookKind === 'Custom' ? 'hook' : hookKind} within a function expression`,
                 suggestions: null,
               }),
             );
