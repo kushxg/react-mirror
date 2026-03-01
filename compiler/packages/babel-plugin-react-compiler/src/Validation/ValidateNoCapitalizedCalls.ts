@@ -5,7 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import {CompilerError, EnvironmentConfig, ErrorSeverity} from '..';
+import {CompilerError, EnvironmentConfig} from '..';
+import {ErrorCategory} from '../CompilerError';
 import {HIRFunction, IdentifierId} from '../HIR';
 import {DEFAULT_GLOBALS} from '../HIR/Globals';
 import {Result} from '../Utils/Result';
@@ -18,16 +19,8 @@ export function validateNoCapitalizedCalls(
     ...DEFAULT_GLOBALS.keys(),
     ...(envConfig.validateNoCapitalizedCalls ?? []),
   ]);
-  /*
-   * The hook pattern may allow uppercase names, like React$useState, so we need to be sure that we
-   * do not error in those cases
-   */
-  const hookPattern =
-    envConfig.hookPattern != null ? new RegExp(envConfig.hookPattern) : null;
   const isAllowed = (name: string): boolean => {
-    return (
-      ALLOW_LIST.has(name) || (hookPattern != null && hookPattern.test(name))
-    );
+    return ALLOW_LIST.has(name);
   };
 
   const errors = new CompilerError();
@@ -56,8 +49,9 @@ export function validateNoCapitalizedCalls(
           const calleeName = capitalLoadGlobals.get(calleeIdentifier);
           if (calleeName != null) {
             CompilerError.throwInvalidReact({
+              category: ErrorCategory.CapitalizedCalls,
               reason,
-              description: `${calleeName} may be a component.`,
+              description: `${calleeName} may be a component`,
               loc: value.loc,
               suggestions: null,
             });
@@ -79,9 +73,9 @@ export function validateNoCapitalizedCalls(
           const propertyName = capitalizedProperties.get(propertyIdentifier);
           if (propertyName != null) {
             errors.push({
-              severity: ErrorSeverity.InvalidReact,
+              category: ErrorCategory.CapitalizedCalls,
               reason,
-              description: `${propertyName} may be a component.`,
+              description: `${propertyName} may be a component`,
               loc: value.loc,
               suggestions: null,
             });
