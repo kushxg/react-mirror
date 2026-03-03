@@ -12,7 +12,6 @@
 describe('when Trusted Types are available in global object', () => {
   let React;
   let ReactDOMClient;
-  let ReactFeatureFlags;
   let act;
   let assertConsoleErrorDev;
   let container;
@@ -33,8 +32,6 @@ describe('when Trusted Types are available in global object', () => {
       isScript: () => false,
       isScriptURL: () => false,
     };
-    ReactFeatureFlags = require('shared/ReactFeatureFlags');
-    ReactFeatureFlags.enableTrustedTypesIntegration = true;
     React = require('react');
     ReactDOMClient = require('react-dom/client');
     ({act, assertConsoleErrorDev} = require('internal-test-utils'));
