@@ -1,3 +1,9 @@
+/**
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 'use strict';
 
 const babel = require('@babel/register');
@@ -184,7 +190,7 @@ function getNextMajorFlagValue(flag) {
     return '📊';
   } else if (value === 'dev') {
     return '💻';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(`Unexpected OSS Stable value ${value} for flag ${flag}`);
@@ -206,7 +212,7 @@ function getOSSCanaryFlagValue(flag) {
     return '📊';
   } else if (value === 'dev') {
     return '💻';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(`Unexpected OSS Canary value ${value} for flag ${flag}`);
@@ -223,7 +229,7 @@ function getOSSExperimentalFlagValue(flag) {
     return '📊';
   } else if (value === 'dev') {
     return '💻';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(
@@ -244,7 +250,7 @@ function getWWWModernFlagValue(flag) {
     return '💻';
   } else if (value === 'gk') {
     return '🧪';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(`Unexpected WWW Modern value ${value} for flag ${flag}`);
@@ -268,7 +274,7 @@ function getWWWClassicFlagValue(flag) {
     return '💻';
   } else if (value === 'gk') {
     return '🧪';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(`Unexpected WWW Classic value ${value} for flag ${flag}`);
@@ -289,7 +295,7 @@ function getRNNextMajorFlagValue(flag) {
     return '💻';
   } else if (value === 'gk') {
     return '🧪';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(`Unexpected RN OSS value ${value} for flag ${flag}`);
@@ -314,7 +320,7 @@ function getRNOSSFlagValue(flag) {
     return '💻';
   } else if (value === 'gk') {
     return '🧪';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(`Unexpected RN OSS value ${value} for flag ${flag}`);
@@ -338,7 +344,7 @@ function getRNFBFlagValue(flag) {
     return '💻';
   } else if (value === 'gk') {
     return '🧪';
-  } else if (typeof value === 'number') {
+  } else if (typeof value === 'number' || typeof value === 'string') {
     return value;
   } else {
     throw new Error(`Unexpected RN FB value ${value} for flag ${flag}`);
