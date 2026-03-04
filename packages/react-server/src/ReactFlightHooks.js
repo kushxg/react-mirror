@@ -17,7 +17,6 @@ import {
 } from 'shared/ReactSymbols';
 import {createThenableState, trackUsedThenable} from './ReactFlightThenable';
 import {isClientReference} from './ReactFlightServerConfig';
-import {enableUseEffectEventHook} from 'shared/ReactFeatureFlags';
 
 let currentRequest = null;
 let thenableIndexCounter = 0;
@@ -58,6 +57,12 @@ export function getThenableStateAfterSuspending(): ThenableState {
   return state;
 }
 
+export function getTrackedThenablesAfterRendering(): null | Array<
+  Thenable<any>,
+> {
+  return thenableState;
+}
+
 export const HooksDispatcher: Dispatcher = {
   readContext: (unsupportedContext: any),
 
@@ -95,10 +100,8 @@ export const HooksDispatcher: Dispatcher = {
   useCacheRefresh(): <T>(?() => T, ?T) => void {
     return unsupportedRefresh;
   },
+  useEffectEvent: (unsupportedHook: any),
 };
-if (enableUseEffectEventHook) {
-  HooksDispatcher.useEffectEvent = (unsupportedHook: any);
-}
 
 function unsupportedHook(): void {
   throw new Error('This Hook is not supported in Server Components.');
@@ -120,13 +123,7 @@ function useId(): string {
   }
   const id = currentRequest.identifierCount++;
   // use 'S' for Flight components to distinguish from 'R' and 'r' in Fizz/Client
-  return (
-    '\u00AB' +
-    currentRequest.identifierPrefix +
-    'S' +
-    id.toString(32) +
-    '\u00BB'
-  );
+  return '_' + currentRequest.identifierPrefix + 'S_' + id.toString(32) + '_';
 }
 
 function use<T>(usable: Usable<T>): T {
