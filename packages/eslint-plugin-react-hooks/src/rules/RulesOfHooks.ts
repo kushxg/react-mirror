@@ -7,10 +7,20 @@
 /* eslint-disable no-for-of-loops/no-for-of-loops */
 
 import type {Rule, Scope} from 'eslint';
-import type {CallExpression, DoWhileStatement, Node} from 'estree';
+import type {
+  CallExpression,
+  CatchClause,
+  DoWhileStatement,
+  Expression,
+  Identifier,
+  Node,
+  Super,
+  TryStatement,
+} from 'estree';
 
 // @ts-expect-error untyped module
 import CodePathAnalyzer from '../code-path-analysis/code-path-analyzer';
+import {getAdditionalEffectHooksFromSettings} from '../shared/Utils';
 
 /**
  * Catch all identifiers that begin with "use" followed by an uppercase Latin
@@ -111,12 +121,56 @@ function isInsideDoWhileLoop(node: Node | undefined): node is DoWhileStatement {
   return false;
 }
 
-function isUseEffectEventIdentifier(node: Node): boolean {
-  if (__EXPERIMENTAL__) {
-    return node.type === 'Identifier' && node.name === 'useEffectEvent';
+function isInsideTryCatch(
+  node: Node | undefined,
+): node is TryStatement | CatchClause {
+  while (node) {
+    if (node.type === 'TryStatement' || node.type === 'CatchClause') {
+      return true;
+    }
+    node = node.parent;
   }
   return false;
 }
+
+function getNodeWithoutReactNamespace(
+  node: Expression | Super,
+): Expression | Identifier | Super {
+  if (
+    node.type === 'MemberExpression' &&
+    node.object.type === 'Identifier' &&
+    node.object.name === 'React' &&
+    node.property.type === 'Identifier' &&
+    !node.computed
+  ) {
+    return node.property;
+  }
+  return node;
+}
+
+function isEffectIdentifier(node: Node, additionalHooks?: RegExp): boolean {
+  const isBuiltInEffect =
+    node.type === 'Identifier' &&
+    (node.name === 'useEffect' ||
+      node.name === 'useLayoutEffect' ||
+      node.name === 'useInsertionEffect');
+
+  if (isBuiltInEffect) {
+    return true;
+  }
+
+  // Check if this matches additional hooks configured by the user
+  if (additionalHooks && node.type === 'Identifier') {
+    return additionalHooks.test(node.name);
+  }
+
+  return false;
+}
+
+function isUseEffectEventIdentifier(node: Node): boolean {
+  return node.type === 'Identifier' && node.name === 'useEffectEvent';
+}
+
 
 function isUseIdentifier(node: Node): boolean {
   return isReactFunction(node, 'use');
@@ -130,8 +184,62 @@ const rule = {
       recommended: true,
       url: 'https://react.dev/reference/rules/rules-of-hooks',
     },
+    messages: {
+      useInTryCatch:
+        'React Hook "{{hookName}}" cannot be called in a try/catch block.',
+      executedMoreThanOnce:
+        'React Hook "{{hookName}}" may be executed more than once. Possibly ' +
+        'because it is called in a loop. React Hooks must be called in the ' +
+        'exact same order in every component render.',
+      calledInAsyncFunction:
+        'React Hook "{{hookName}}" cannot be called in an async function.',
+      calledConditionally:
+        'React Hook "{{hookName}}" is called conditionally. React Hooks must be ' +
+        'called in the exact same order in every component render.' +
+        '{{earlyReturnHint}}',
+      calledInClass:
+        'React Hook "{{hookName}}" cannot be called in a class component. React Hooks ' +
+        'must be called in a React function component or a custom React ' +
+        'Hook function.',
+      calledInInvalidFunction:
+        'React Hook "{{hookName}}" is called in function "{{functionName}}" that is neither ' +
+        'a React function component nor a custom React Hook function.' +
+        ' React component names must start with an uppercase letter.' +
+        ' React Hook names must start with the word "use".',
+      calledAtTopLevel:
+        'React Hook "{{hookName}}" cannot be called at the top level. React Hooks ' +
+        'must be called in a React function component or a custom React ' +
+        'Hook function.',
+      calledInsideCallback:
+        'React Hook "{{hookName}}" cannot be called inside a callback. React Hooks ' +
+        'must be called in a React function component or a custom React ' +
+        'Hook function.',
+      useEffectEventTopLevel:
+        'React Hook "useEffectEvent" can only be called at the top level of your component.' +
+        ' It cannot be passed down.',
+      useEffectEventInvalidUsage:
+        '`{{functionName}}` is a function created with React Hook "useEffectEvent", and can only be called from ' +
+        'Effects and Effect Events in the same component.' +
+        '{{passDownHint}}',
+    },
+    schema: [
+      {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          additionalHooks: {
+            type: 'string',
+          },
+        },
+      },
+    ],
   },
   create(context: Rule.RuleContext) {
+    const settings = context.settings || {};
+
+    const additionalEffectHooks =
+      getAdditionalEffectHooksFromSettings(settings);
+
     let lastEffect: CallExpression | null = null;
     const codePathReactHooksMapStack: Array<
       Map<Rule.CodePathSegment, Array<Node>>
@@ -532,6 +640,15 @@ const rule = {
               continue;
             }
 
+            // Report an error if use() is called inside try/catch.
+            if (isUseIdentifier(hook) && isInsideTryCatch(hook)) {
+              context.report({
+                node: hook,
+                messageId: 'useInTryCatch',
+                data: {hookName: getSourceCode().getText(hook)},
+              });
+            }
+
             // Report an error if a hook may be called more then once.
             // `use(...)` can be called in loops.
             if (
@@ -540,11 +657,8 @@ const rule = {
             ) {
               context.report({
                 node: hook,
-                message:
-                  `React Hook "${getSourceCode().getText(hook)}" may be executed ` +
-                  'more than once. Possibly because it is called in a loop. ' +
-                  'React Hooks must be called in the exact same order in ' +
-                  'every component render.',
+                messageId: 'executedMoreThanOnce',
+                data: {hookName: getSourceCode().getText(hook)},
               });
             }
 
@@ -560,9 +674,8 @@ const rule = {
               if (isAsyncFunction) {
                 context.report({
                   node: hook,
-                  message:
-                    `React Hook "${getSourceCode().getText(hook)}" cannot be ` +
-                    'called in an async function.',
+                  messageId: 'calledInAsyncFunction',
+                  data: {hookName: getSourceCode().getText(hook)},
                 });
               }
 
@@ -576,15 +689,17 @@ const rule = {
                 !isUseIdentifier(hook) && // `use(...)` can be called conditionally.
                 !isInsideDoWhileLoop(hook) // wrapping do/while loops are checked separately.
               ) {
-                const message =
-                  `React Hook "${getSourceCode().getText(hook)}" is called ` +
-                  'conditionally. React Hooks must be called in the exact ' +
-                  'same order in every component render.' +
-                  (possiblyHasEarlyReturn
-                    ? ' Did you accidentally call a React Hook after an' +
-                      ' early return?'
-                    : '');
-                context.report({node: hook, message});
+                context.report({
+                  node: hook,
+                  messageId: 'calledConditionally',
+                  data: {
+                    hookName: getSourceCode().getText(hook),
+                    earlyReturnHint: possiblyHasEarlyReturn
+                      ? ' Did you accidentally call a React Hook after an' +
+                        ' early return?'
+                      : '',
+                  },
+                });
               }
             } else if (
               codePathNode.parent != null &&
@@ -595,28 +710,28 @@ const rule = {
               codePathNode.parent.value === codePathNode
             ) {
               // Custom message for hooks inside a class
-              const message =
-                `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
-                'in a class component. React Hooks must be called in a ' +
-                'React function component or a custom React Hook function.';
-              context.report({node: hook, message});
+              context.report({
+                node: hook,
+                messageId: 'calledInClass',
+                data: {hookName: getSourceCode().getText(hook)},
+              });
             } else if (codePathFunctionName) {
               // Custom message if we found an invalid function name.
-              const message =
-                `React Hook "${getSourceCode().getText(hook)}" is called in ` +
-                `function "${getSourceCode().getText(codePathFunctionName)}" ` +
-                'that is neither a React function component nor a custom ' +
-                'React Hook function.' +
-                ' React component names must start with an uppercase letter.' +
-                ' React Hook names must start with the word "use".';
-              context.report({node: hook, message});
+              context.report({
+                node: hook,
+                messageId: 'calledInInvalidFunction',
+                data: {
+                  hookName: getSourceCode().getText(hook),
+                  functionName: getSourceCode().getText(codePathFunctionName),
+                },
+              });
             } else if (codePathNode.type === 'Program') {
               // These are dangerous if you have inline requires enabled.
-              const message =
-                `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
-                'at the top level. React Hooks must be called in a ' +
-                'React function component or a custom React Hook function.';
-              context.report({node: hook, message});
+              context.report({
+                node: hook,
+                messageId: 'calledAtTopLevel',
+                data: {hookName: getSourceCode().getText(hook)},
+              });
             } else {
               // Assume in all other cases the user called a hook in some
               // random function callback. This should usually be true for
@@ -625,11 +740,11 @@ const rule = {
               // uncommon cases doesn't matter.
               // `use(...)` can be called in callbacks.
               if (isSomewhereInsideComponentOrHook && !isUseIdentifier(hook)) {
-                const message =
-                  `React Hook "${getSourceCode().getText(hook)}" cannot be called ` +
-                  'inside a callback. React Hooks must be called in a ' +
-                  'React function component or a custom React Hook function.';
-                context.report({node: hook, message});
+                context.report({
+                  node: hook,
+                  messageId: 'calledInsideCallback',
+                  data: {hookName: getSourceCode().getText(hook)},
+                });
               }
             }
           }
@@ -666,33 +781,47 @@ const rule = {
 
         // useEffectEvent: useEffectEvent functions can be passed by reference within useEffect as well as in
         // another useEffectEvent
+        // Check all `useEffect` and `React.useEffect`, `useEffectEvent`, and `React.useEffectEvent`
+        const nodeWithoutNamespace = getNodeWithoutReactNamespace(node.callee);
         if (
-          node.callee.type === 'Identifier' &&
-          (node.callee.name === 'useEffect' ||
-            isUseEffectEventIdentifier(node.callee)) &&
+          (isEffectIdentifier(nodeWithoutNamespace, additionalEffectHooks) ||
+            isUseEffectEventIdentifier(nodeWithoutNamespace)) &&
           node.arguments.length > 0
         ) {
           // Denote that we have traversed into a useEffect call, and stash the CallExpr for
           // comparison later when we exit
           lastEffect = node;
         }
+
+        // Specifically disallow <Child onClick={useEffectEvent(...)} /> because this
+        // case can't be caught by `recordAllUseEffectEventFunctions` as it isn't assigned to a variable
+        if (
+          isUseEffectEventIdentifier(nodeWithoutNamespace) &&
+          node.parent?.type !== 'VariableDeclarator' &&
+          // like in other hooks, calling useEffectEvent at component's top level without assignment is valid
+          node.parent?.type !== 'ExpressionStatement'
+        ) {
+          context.report({
+            node,
+            messageId: 'useEffectEventTopLevel',
+          });
+        }
       },
 
       Identifier(node) {
         // This identifier resolves to a useEffectEvent function, but isn't being referenced in an
         // effect or another event function. It isn't being called either.
-        if (
-          lastEffect == null &&
-          useEffectEventFunctions.has(node) &&
-          node.parent.type !== 'CallExpression'
-        ) {
+        if (lastEffect == null && useEffectEventFunctions.has(node)) {
           context.report({
             node,
-            message:
-              `\`${getSourceCode().getText(
-                node,
-              )}\` is a function created with React Hook "useEffectEvent", and can only be called from ` +
-              'the same component. They cannot be assigned to variables or passed down.',
+            messageId: 'useEffectEventInvalidUsage',
+            data: {
+              functionName: getSourceCode().getText(node),
+              passDownHint:
+                node.parent.type === 'CallExpression'
+                  ? ''
+                  : ' It cannot be assigned to a variable or passed down.',
+            },
           });
         }
       },
@@ -715,6 +844,18 @@ const rule = {
         if (isInsideComponentOrHook(node)) {
           recordAllUseEffectEventFunctions(getScope(node));
         }
+      },
+
+      // @ts-expect-error parser-hermes produces these node types
+      ComponentDeclaration(node) {
+        // component MyComponent() { const onClick = useEffectEvent(...) }
+        recordAllUseEffectEventFunctions(getScope(node));
+      },
+
+      // @ts-expect-error parser-hermes produces these node types
+      HookDeclaration(node) {
+        // hook useMyHook() { const onClick = useEffectEvent(...) }
+        recordAllUseEffectEventFunctions(getScope(node));
       },
     };
   },

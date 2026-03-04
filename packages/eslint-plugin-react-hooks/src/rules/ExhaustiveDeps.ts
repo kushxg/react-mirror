@@ -21,6 +21,8 @@ import type {
   VariableDeclarator,
 } from 'estree';
 
+import {getAdditionalEffectHooksFromSettings} from '../shared/Utils';
+
 type DeclaredDependency = {
   key: string;
   node: Node;
@@ -49,6 +51,83 @@ const rule = {
     },
     fixable: 'code',
     hasSuggestions: true,
+    messages: {
+      asyncEffectCallback:
+        'Effect callbacks are synchronous to prevent race conditions. ' +
+        'Put the async function inside:\n\n' +
+        'useEffect(() => {\n' +
+        '  async function fetchData() {\n' +
+        '    // You can await here\n' +
+        '    const response = await MyAPI.getData(someId);\n' +
+        '    // ...\n' +
+        '  }\n' +
+        '  fetchData();\n' +
+        '}, [someId]); // Or [] if effect doesn\'t need props or state\n\n' +
+        'Learn more about data fetching with Hooks: https://react.dev/link/hooks-data-fetching',
+      refCurrentInCleanup:
+        "The ref value '{{dependency}}.current' will likely have " +
+        'changed by the time this effect cleanup function runs. If ' +
+        'this ref points to a node rendered by React, copy ' +
+        "'{{dependency}}.current' to a variable inside the effect, and " +
+        'use that variable in the cleanup function.',
+      staleAssignment:
+        "Assignments to the '{{key}}' variable from inside React Hook " +
+        '{{reactiveHookName}} will be lost after each ' +
+        'render. To preserve the value over time, store it in a useRef ' +
+        "Hook and keep the mutable value in the '.current' property. " +
+        'Otherwise, you can move this variable directly inside ' +
+        '{{reactiveHookName}}.',
+      setStateInEffectWithoutDeps:
+        "React Hook {{reactiveHookName}} contains a call to '{{stateCall}}'. " +
+        'Without a list of dependencies, this can lead to an infinite chain of updates. ' +
+        'To fix this, pass [{{suggestedDeps}}] as a second argument to the {{reactiveHookName}} Hook.',
+      depsNotArray:
+        'React Hook {{reactiveHookName}} was passed a ' +
+        'dependency list that is not an array literal. This means we ' +
+        "can't statically verify whether you've passed the correct " +
+        'dependencies.',
+      spreadInDeps:
+        'React Hook {{reactiveHookName}} has a spread ' +
+        "element in its dependency array. This means we can't " +
+        "statically verify whether you've passed the " +
+        'correct dependencies.',
+      useEffectEventInDeps:
+        'Functions returned from `useEffectEvent` must not be included in the dependency array. ' +
+        'Remove `{{depName}}` from the list.',
+      literalInDepsWithSuggestion:
+        'The {{literalRaw}} literal is not a valid dependency ' +
+        'because it never changes. ' +
+        'Did you mean to include {{literalValue}} in the array instead?',
+      literalInDeps:
+        'The {{literalRaw}} literal is not a valid dependency ' +
+        'because it never changes. You can safely remove it.',
+      complexExpressionInDeps:
+        'React Hook {{reactiveHookName}} has a ' +
+        'complex expression in the dependency array. ' +
+        'Extract it to a separate variable so it can be statically checked.',
+      constructionChangesEveryRender:
+        "The '{{constructionName}}' {{depType}} {{causation}} the dependencies of " +
+        '{{reactiveHookName}} Hook (at line {{line}}) ' +
+        'change on every render. {{advice}}',
+      depsChanged:
+        'React Hook {{reactiveHookName}} has {{problem}}{{extraWarning}}',
+      noCallbackProvided:
+        'React Hook {{reactiveHookName}} requires an effect callback. ' +
+        'Did you forget to pass a callback to the hook?',
+      requiresExplicitDeps:
+        'React Hook {{reactiveHookName}} always requires dependencies. ' +
+        'Please add a dependency array or an explicit `undefined`',
+      noDepsForOptimization:
+        'React Hook {{reactiveHookName}} does nothing when called with ' +
+        'only one argument. Did you forget to pass an array of ' +
+        'dependencies?',
+      unknownDependencies:
+        'React Hook {{reactiveHookName}} received a function whose dependencies ' +
+        'are unknown. Pass an inline function instead.',
+      missingDependencyFallback:
+        "React Hook {{reactiveHookName}} has a missing dependency: '{{callbackName}}'. " +
+        'Either include it or remove the dependency array.',
+    },
     schema: [
       {
         type: 'object',
@@ -61,28 +140,48 @@ const rule = {
           enableDangerousAutofixThisMayCauseInfiniteLoops: {
             type: 'boolean',
           },
+          experimental_autoDependenciesHooks: {
+            type: 'array',
+            items: {
+              type: 'string',
+            },
+          },
+          requireExplicitEffectDeps: {
+            type: 'boolean',
+          },
         },
       },
     ],
   },
   create(context: Rule.RuleContext) {
+    const rawOptions = context.options && context.options[0];
+    const settings = context.settings || {};
+
     // Parse the `additionalHooks` regex.
+    // Use rule-level additionalHooks if provided, otherwise fall back to settings
     const additionalHooks =
-      context.options &&
-      context.options[0] &&
-      context.options[0].additionalHooks
-        ? new RegExp(context.options[0].additionalHooks)
-        : undefined;
+      rawOptions && rawOptions.additionalHooks
+        ? new RegExp(rawOptions.additionalHooks)
+        : getAdditionalEffectHooksFromSettings(settings);
 
     const enableDangerousAutofixThisMayCauseInfiniteLoops: boolean =
-      (context.options &&
-        context.options[0] &&
-        context.options[0].enableDangerousAutofixThisMayCauseInfiniteLoops) ||
+      (rawOptions &&
+        rawOptions.enableDangerousAutofixThisMayCauseInfiniteLoops) ||
       false;
+
+    const experimental_autoDependenciesHooks: ReadonlyArray<string> =
+      rawOptions && Array.isArray(rawOptions.experimental_autoDependenciesHooks)
+        ? rawOptions.experimental_autoDependenciesHooks
+        : [];
+
+    const requireExplicitEffectDeps: boolean =
+      (rawOptions && rawOptions.requireExplicitEffectDeps) || false;
 
     const options = {
       additionalHooks,
+      experimental_autoDependenciesHooks,
       enableDangerousAutofixThisMayCauseInfiniteLoops,
+      requireExplicitEffectDeps,
     };
 
     function reportProblem(problem: Rule.ReportDescriptor) {
@@ -162,22 +261,12 @@ const rule = {
       reactiveHook: Node,
       reactiveHookName: string,
       isEffect: boolean,
+      isAutoDepsHook: boolean,
     ): void {
       if (isEffect && node.async) {
         reportProblem({
           node: node,
-          message:
-            `Effect callbacks are synchronous to prevent race conditions. ` +
-            `Put the async function inside:\n\n` +
-            'useEffect(() => {\n' +
-            '  async function fetchData() {\n' +
-            '    // You can await here\n' +
-            '    const response = await MyAPI.getData(someId);\n' +
-            '    // ...\n' +
-            '  }\n' +
-            '  fetchData();\n' +
-            `}, [someId]); // Or [] if effect doesn't need props or state\n\n` +
-            'Learn more about data fetching with Hooks: https://react.dev/link/hooks-data-fetching',
+          messageId: 'asyncEffectCallback',
         });
       }
 
@@ -203,7 +292,13 @@ const rule = {
         let currentScope = scope.upper;
         while (currentScope) {
           pureScopes.add(currentScope);
-          if (currentScope.type === 'function') {
+          if (
+            currentScope.type === 'function' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'hook' ||
+            // @ts-expect-error incorrect TS types
+            currentScope.type === 'component'
+          ) {
             break;
           }
           currentScope = currentScope.upper;
@@ -535,8 +630,12 @@ const rule = {
             continue;
           }
           // Ignore Flow type parameters
-          // @ts-expect-error We don't have flow types
-          if (def.type === 'TypeParameter') {
+          if (
+            // @ts-expect-error We don't have flow types
+            def.type === 'TypeParameter' ||
+            // @ts-expect-error Flow-specific AST node type
+            dependencyNode.parent?.type === 'GenericTypeAnnotation'
+          ) {
             continue;
           }
 
@@ -594,12 +693,8 @@ const rule = {
           reportProblem({
             // @ts-expect-error We can do better here (dependencyNode.parent has not been type narrowed)
             node: dependencyNode.parent.property,
-            message:
-              `The ref value '${dependency}.current' will likely have ` +
-              `changed by the time this effect cleanup function runs. If ` +
-              `this ref points to a node rendered by React, copy ` +
-              `'${dependency}.current' to a variable inside the effect, and ` +
-              `use that variable in the cleanup function.`,
+            messageId: 'refCurrentInCleanup',
+            data: {dependency},
           });
         },
       );
@@ -614,13 +709,11 @@ const rule = {
         staleAssignments.add(key);
         reportProblem({
           node: writeExpr,
-          message:
-            `Assignments to the '${key}' variable from inside React Hook ` +
-            `${getSourceCode().getText(reactiveHook)} will be lost after each ` +
-            `render. To preserve the value over time, store it in a useRef ` +
-            `Hook and keep the mutable value in the '.current' property. ` +
-            `Otherwise, you can move this variable directly inside ` +
-            `${getSourceCode().getText(reactiveHook)}.`,
+          messageId: 'staleAssignment',
+          data: {
+            key,
+            reactiveHookName: getSourceCode().getText(reactiveHook),
+          },
         });
       }
 
@@ -643,6 +736,9 @@ const rule = {
       }
 
       if (!declaredDependenciesNode) {
+        if (isAutoDepsHook) {
+          return;
+        }
         // Check if there are any top-level setState() calls.
         // Those tend to lead to infinite loops.
         let setStateInsideEffectWithoutDeps: string | null = null;
@@ -682,12 +778,12 @@ const rule = {
           });
           reportProblem({
             node: reactiveHook,
-            message:
-              `React Hook ${reactiveHookName} contains a call to '${setStateInsideEffectWithoutDeps}'. ` +
-              `Without a list of dependencies, this can lead to an infinite chain of updates. ` +
-              `To fix this, pass [` +
-              suggestedDependencies.join(', ') +
-              `] as a second argument to the ${reactiveHookName} Hook.`,
+            messageId: 'setStateInEffectWithoutDeps',
+            data: {
+              reactiveHookName,
+              stateCall: setStateInsideEffectWithoutDeps,
+              suggestedDeps: suggestedDependencies.join(', '),
+            },
             suggest: [
               {
                 desc: `Add dependencies array: [${suggestedDependencies.join(
@@ -705,6 +801,13 @@ const rule = {
         }
         return;
       }
+      if (
+        isAutoDepsHook &&
+        declaredDependenciesNode.type === 'Literal' &&
+        declaredDependenciesNode.value === null
+      ) {
+        return;
+      }
 
       const declaredDependencies: Array<DeclaredDependency> = [];
       const externalDependencies = new Set<string>();
@@ -720,11 +823,10 @@ const rule = {
         // the user this in an error.
         reportProblem({
           node: declaredDependenciesNode,
-          message:
-            `React Hook ${getSourceCode().getText(reactiveHook)} was passed a ` +
-            'dependency list that is not an array literal. This means we ' +
-            "can't statically verify whether you've passed the correct " +
-            'dependencies.',
+          messageId: 'depsNotArray',
+          data: {
+            reactiveHookName: getSourceCode().getText(reactiveHook),
+          },
         });
       } else {
         const arrayExpression = isTSAsArrayExpression
@@ -741,22 +843,20 @@ const rule = {
             if (declaredDependencyNode.type === 'SpreadElement') {
               reportProblem({
                 node: declaredDependencyNode,
-                message:
-                  `React Hook ${getSourceCode().getText(reactiveHook)} has a spread ` +
-                  "element in its dependency array. This means we can't " +
-                  "statically verify whether you've passed the " +
-                  'correct dependencies.',
+                messageId: 'spreadInDeps',
+                data: {
+                  reactiveHookName: getSourceCode().getText(reactiveHook),
+                },
               });
               return;
             }
             if (useEffectEventVariables.has(declaredDependencyNode)) {
               reportProblem({
                 node: declaredDependencyNode,
-                message:
-                  'Functions returned from `useEffectEvent` must not be included in the dependency array. ' +
-                  `Remove \`${getSourceCode().getText(
-                    declaredDependencyNode,
-                  )}\` from the list.`,
+                messageId: 'useEffectEventInDeps',
+                data: {
+                  depName: getSourceCode().getText(declaredDependencyNode),
+                },
                 suggest: [
                   {
                     desc: `Remove the dependency \`${getSourceCode().getText(
@@ -789,26 +889,28 @@ const rule = {
                   ) {
                     reportProblem({
                       node: declaredDependencyNode,
-                      message:
-                        `The ${declaredDependencyNode.raw} literal is not a valid dependency ` +
-                        `because it never changes. ` +
-                        `Did you mean to include ${declaredDependencyNode.value} in the array instead?`,
+                      messageId: 'literalInDepsWithSuggestion',
+                      data: {
+                        literalRaw: String(declaredDependencyNode.raw),
+                        literalValue: String(declaredDependencyNode.value),
+                      },
                     });
                   } else {
                     reportProblem({
                       node: declaredDependencyNode,
-                      message:
-                        `The ${declaredDependencyNode.raw} literal is not a valid dependency ` +
-                        'because it never changes. You can safely remove it.',
+                      messageId: 'literalInDeps',
+                      data: {
+                        literalRaw: String(declaredDependencyNode.raw),
+                      },
                     });
                   }
                 } else {
                   reportProblem({
                     node: declaredDependencyNode,
-                    message:
-                      `React Hook ${getSourceCode().getText(reactiveHook)} has a ` +
-                      `complex expression in the dependency array. ` +
-                      'Extract it to a separate variable so it can be statically checked.',
+                    messageId: 'complexExpressionInDeps',
+                    data: {
+                      reactiveHookName: getSourceCode().getText(reactiveHook),
+                    },
                   });
                 }
 
@@ -892,11 +994,6 @@ const rule = {
                 ? 'could make'
                 : 'makes';
 
-            const message =
-              `The '${construction.name.name}' ${depType} ${causation} the dependencies of ` +
-              `${reactiveHookName} Hook (at line ${declaredDependenciesNode.loc?.start.line}) ` +
-              `change on every render. ${advice}`;
-
             let suggest: Rule.ReportDescriptor['suggest'];
             // Only handle the simple case of variable assignments.
             // Wrapping function declarations can mess up hoisting.
@@ -934,7 +1031,17 @@ const rule = {
             reportProblem({
               // TODO: Why not report this at the dependency site?
               node: construction.node,
-              message,
+              messageId: 'constructionChangesEveryRender',
+              data: {
+                constructionName: construction.name.name,
+                depType,
+                causation,
+                reactiveHookName,
+                line: String(
+                  declaredDependenciesNode.loc?.start.line,
+                ),
+                advice,
+              },
               suggest,
             });
           },
@@ -1246,23 +1353,32 @@ const rule = {
 
       reportProblem({
         node: declaredDependenciesNode,
-        message:
-          `React Hook ${getSourceCode().getText(reactiveHook)} has ` +
+        messageId: 'depsChanged',
+        data: {
+          reactiveHookName: getSourceCode().getText(reactiveHook),
           // To avoid a long message, show the next actionable item.
-          (getWarningMessage(missingDependencies, 'a', 'missing', 'include') ||
+          problem: String(
             getWarningMessage(
-              unnecessaryDependencies,
-              'an',
-              'unnecessary',
-              'exclude',
-            ) ||
-            getWarningMessage(
-              duplicateDependencies,
+              missingDependencies,
               'a',
-              'duplicate',
-              'omit',
-            )) +
+              'missing',
+              'include',
+            ) ||
+              getWarningMessage(
+                unnecessaryDependencies,
+                'an',
+                'unnecessary',
+                'exclude',
+              ) ||
+              getWarningMessage(
+                duplicateDependencies,
+                'a',
+                'duplicate',
+                'omit',
+              ),
+          ),
           extraWarning,
+        },
         suggest: [
           {
             desc: `Update the dependencies array to be: [${suggestedDeps
@@ -1305,17 +1421,33 @@ const rule = {
       if (!callback) {
         reportProblem({
           node: reactiveHook,
-          message:
-            `React Hook ${reactiveHookName} requires an effect callback. ` +
-            `Did you forget to pass a callback to the hook?`,
+          messageId: 'noCallbackProvided',
+          data: {reactiveHookName},
         });
         return;
       }
 
+      if (!maybeNode && isEffect && options.requireExplicitEffectDeps) {
+        reportProblem({
+          node: reactiveHook,
+          messageId: 'requiresExplicitDeps',
+          data: {reactiveHookName},
+        });
+      }
+
+      const isAutoDepsHook =
+        options.experimental_autoDependenciesHooks.includes(reactiveHookName);
+
       // Check the declared dependencies for this reactive hook. If there is no
       // second argument then the reactive callback will re-run on every render.
       // So no need to check for dependency inclusion.
-      if (!declaredDependenciesNode && !isEffect) {
+      if (
+        (!declaredDependenciesNode ||
+          (isAutoDepsHook &&
+            declaredDependenciesNode.type === 'Literal' &&
+            declaredDependenciesNode.value === null)) &&
+        !isEffect
+      ) {
         // These are only used for optimization.
         if (
           reactiveHookName === 'useMemo' ||
@@ -1324,10 +1456,8 @@ const rule = {
           // TODO: Can this have a suggestion?
           reportProblem({
             node: reactiveHook,
-            message:
-              `React Hook ${reactiveHookName} does nothing when called with ` +
-              `only one argument. Did you forget to pass an array of ` +
-              `dependencies?`,
+            messageId: 'noDepsForOptimization',
+            data: {reactiveHookName},
           });
         }
         return;
@@ -1349,11 +1479,17 @@ const rule = {
             reactiveHook,
             reactiveHookName,
             isEffect,
+            isAutoDepsHook,
           );
           return; // Handled
         case 'Identifier':
-          if (!declaredDependenciesNode) {
-            // No deps, no problems.
+          if (
+            !declaredDependenciesNode ||
+            (isAutoDepsHook &&
+              declaredDependenciesNode.type === 'Literal' &&
+              declaredDependenciesNode.value === null)
+          ) {
+            // Always runs, no problems.
             return; // Handled
           }
           // The function passed as a callback is not written inline.
@@ -1385,7 +1521,8 @@ const rule = {
           if (def.type === 'Parameter') {
             reportProblem({
               node: reactiveHook,
-              message: getUnknownDependenciesMessage(reactiveHookName),
+              messageId: 'unknownDependencies',
+              data: {reactiveHookName},
             });
             return;
           }
@@ -1402,6 +1539,7 @@ const rule = {
                 reactiveHook,
                 reactiveHookName,
                 isEffect,
+                isAutoDepsHook,
               );
               return; // Handled
             case 'VariableDeclarator':
@@ -1421,6 +1559,7 @@ const rule = {
                     reactiveHook,
                     reactiveHookName,
                     isEffect,
+                    isAutoDepsHook,
                   );
                   return; // Handled
               }
@@ -1431,7 +1570,8 @@ const rule = {
           // useEffect(generateEffectBody(), []);
           reportProblem({
             node: reactiveHook,
-            message: getUnknownDependenciesMessage(reactiveHookName),
+            messageId: 'unknownDependencies',
+            data: {reactiveHookName},
           });
           return; // Handled
       }
@@ -1439,9 +1579,11 @@ const rule = {
       // Something unusual. Fall back to suggesting to add the body itself as a dep.
       reportProblem({
         node: reactiveHook,
-        message:
-          `React Hook ${reactiveHookName} has a missing dependency: '${callback.name}'. ` +
-          `Either include it or remove the dependency array.`,
+        messageId: 'missingDependencyFallback',
+        data: {
+          reactiveHookName,
+          callbackName: callback.name,
+        },
         suggest: [
           {
             desc: `Update the dependencies array to be: [${callback.name}]`,
@@ -2056,17 +2198,8 @@ function isAncestorNodeOf(a: Node, b: Node): boolean {
 }
 
 function isUseEffectEventIdentifier(node: Node): boolean {
-  if (__EXPERIMENTAL__) {
-    return node.type === 'Identifier' && node.name === 'useEffectEvent';
-  }
-  return false;
+  return node.type === 'Identifier' && node.name === 'useEffectEvent';
 }
 
-function getUnknownDependenciesMessage(reactiveHookName: string): string {
-  return (
-    `React Hook ${reactiveHookName} received a function whose dependencies ` +
-    `are unknown. Pass an inline function instead.`
-  );
-}
 
 export default rule;
