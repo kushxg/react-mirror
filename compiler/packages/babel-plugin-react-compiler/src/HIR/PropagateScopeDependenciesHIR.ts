@@ -31,6 +31,7 @@ import {
   ObjectMethod,
   PropertyLiteral,
   convertHoistedLValueKind,
+  SourceLocation,
 } from './HIR';
 import {
   collectHoistablePropertyLoads,
@@ -298,6 +299,7 @@ function collectTemporariesSidemapImpl(
             value.object,
             value.property,
             false,
+            value.loc,
             temporaries,
           );
           temporaries.set(lvalue.identifier.id, property);
@@ -316,7 +318,9 @@ function collectTemporariesSidemapImpl(
         ) {
           temporaries.set(lvalue.identifier.id, {
             identifier: value.place.identifier,
+            reactive: value.place.reactive,
             path: [],
+            loc: value.loc,
           });
         }
       } else if (
@@ -338,6 +342,7 @@ function getProperty(
   object: Place,
   propertyName: PropertyLiteral,
   optional: boolean,
+  loc: SourceLocation,
   temporaries: ReadonlyMap<IdentifierId, ReactiveScopeDependency>,
 ): ReactiveScopeDependency {
   /*
@@ -369,12 +374,19 @@ function getProperty(
   if (resolvedDependency == null) {
     property = {
       identifier: object.identifier,
-      path: [{property: propertyName, optional}],
+      reactive: object.reactive,
+      path: [{property: propertyName, optional, loc}],
+      loc,
     };
   } else {
     property = {
       identifier: resolvedDependency.identifier,
-      path: [...resolvedDependency.path, {property: propertyName, optional}],
+      reactive: resolvedDependency.reactive,
+      path: [
+        ...resolvedDependency.path,
+        {property: propertyName, optional, loc},
+      ],
+      loc,
     };
   }
   return property;
@@ -532,7 +544,9 @@ export class DependencyCollectionContext {
     this.visitDependency(
       this.#temporaries.get(place.identifier.id) ?? {
         identifier: place.identifier,
+        reactive: place.reactive,
         path: [],
+        loc: place.loc,
       },
     );
   }
@@ -541,11 +555,13 @@ export class DependencyCollectionContext {
     object: Place,
     property: PropertyLiteral,
     optional: boolean,
+    loc: SourceLocation,
   ): void {
     const nextDependency = getProperty(
       object,
       property,
       optional,
+      loc,
       this.#temporaries,
     );
     this.visitDependency(nextDependency);
@@ -596,7 +612,9 @@ export class DependencyCollectionContext {
     ) {
       maybeDependency = {
         identifier: maybeDependency.identifier,
+        reactive: maybeDependency.reactive,
         path: [],
+        loc: maybeDependency.loc,
       };
     }
     if (this.#checkValidDependency(maybeDependency)) {
@@ -617,7 +635,12 @@ export class DependencyCollectionContext {
         identifier =>
           identifier.declarationId === place.identifier.declarationId,
       ) &&
-      this.#checkValidDependency({identifier: place.identifier, path: []})
+      this.#checkValidDependency({
+        identifier: place.identifier,
+        reactive: place.reactive,
+        path: [],
+        loc: place.loc,
+      })
     ) {
       currentScope.reassignments.add(place.identifier);
     }
@@ -670,7 +693,7 @@ export function handleInstruction(
     return;
   }
   if (value.kind === 'PropertyLoad') {
-    context.visitProperty(value.object, value.property, false);
+    context.visitProperty(value.object, value.property, false, value.loc);
   } else if (value.kind === 'StoreLocal') {
     context.visitOperand(value.value);
     if (value.lvalue.kind === InstructionKind.Reassign) {
