@@ -7,8 +7,12 @@
  * @flow
  */
 
-import type {ReactClientValue} from 'react-server/src/ReactFlightServer';
+import type {
+  Request,
+  ReactClientValue,
+} from 'react-server/src/ReactFlightServer';
 import type {ReactFormState, Thenable} from 'shared/ReactTypes';
+
 import {
   preloadModule,
   requireModule,
@@ -24,8 +28,11 @@ import {
   createPrerenderRequest,
   startWork,
   startFlowing,
+  startFlowingDebug,
   stopFlowing,
   abort,
+  resolveDebugMessage,
+  closeDebugChannel,
 } from 'react-server/src/ReactFlightServer';
 
 import {
@@ -47,34 +54,91 @@ export {
   registerServerReference,
 } from '../ReactFlightParcelReferences';
 
+import {
+  createStringDecoder,
+  readPartialStringChunk,
+  readFinalStringChunk,
+} from 'react-client/src/ReactFlightClientStreamConfigWeb';
+
 import type {TemporaryReferenceSet} from 'react-server/src/ReactFlightServerTemporaryReferences';
 
 export {createTemporaryReferenceSet} from 'react-server/src/ReactFlightServerTemporaryReferences';
 export type {TemporaryReferenceSet};
 
 type Options = {
+  debugChannel?: {readable?: ReadableStream, writable?: WritableStream, ...},
   environmentName?: string | (() => string),
   filterStackFrame?: (url: string, functionName: string) => boolean,
   identifierPrefix?: string,
   signal?: AbortSignal,
   temporaryReferences?: TemporaryReferenceSet,
   onError?: (error: mixed) => void,
-  onPostpone?: (reason: string) => void,
+  startTime?: number,
 };
+
+function startReadingFromDebugChannelReadableStream(
+  request: Request,
+  stream: ReadableStream,
+): void {
+  const reader = stream.getReader();
+  const stringDecoder = createStringDecoder();
+  let stringBuffer = '';
+  function progress({
+    done,
+    value,
+  }: {
+    done: boolean,
+    value: ?any,
+    ...
+  }): void | Promise<void> {
+    const buffer: Uint8Array = (value: any);
+    stringBuffer += done
+      ? readFinalStringChunk(stringDecoder, new Uint8Array(0))
+      : readPartialStringChunk(stringDecoder, buffer);
+    const messages = stringBuffer.split('\n');
+    for (let i = 0; i < messages.length - 1; i++) {
+      resolveDebugMessage(request, messages[i]);
+    }
+    stringBuffer = messages[messages.length - 1];
+    if (done) {
+      closeDebugChannel(request);
+      return;
+    }
+    return reader.read().then(progress).catch(error);
+  }
+  function error(e: any) {
+    abort(
+      request,
+      new Error('Lost connection to the Debug Channel.', {
+        cause: e,
+      }),
+    );
+  }
+  reader.read().then(progress).catch(error);
+}
 
 export function renderToReadableStream(
   model: ReactClientValue,
   options?: Options,
 ): ReadableStream {
+  const debugChannelReadable =
+    __DEV__ && options && options.debugChannel
+      ? options.debugChannel.readable
+      : undefined;
+  const debugChannelWritable =
+    __DEV__ && options && options.debugChannel
+      ? options.debugChannel.writable
+      : undefined;
   const request = createRequest(
     model,
     null,
     options ? options.onError : undefined,
     options ? options.identifierPrefix : undefined,
-    options ? options.onPostpone : undefined,
     options ? options.temporaryReferences : undefined,
+    options ? options.startTime : undefined,
     __DEV__ && options ? options.environmentName : undefined,
     __DEV__ && options ? options.filterStackFrame : undefined,
+    debugChannelReadable !== undefined,
   );
   if (options && options.signal) {
     const signal = options.signal;
@@ -87,6 +151,22 @@ export function renderToReadableStream(
       };
       signal.addEventListener('abort', listener);
     }
+  }
+  if (debugChannelWritable !== undefined) {
+    const debugStream = new ReadableStream(
+      {
+        type: 'bytes',
+        pull: (controller): ?Promise<void> => {
+          startFlowingDebug(request, controller);
+        },
+      },
+      // $FlowFixMe[prop-missing] size() methods are not allowed on byte streams.
+      {highWaterMark: 0},
+    );
+    debugStream.pipeTo(debugChannelWritable);
+  }
+  if (debugChannelReadable !== undefined) {
+    startReadingFromDebugChannelReadableStream(request, debugChannelReadable);
   }
   const stream = new ReadableStream(
     {
@@ -122,9 +202,6 @@ export function prerender(
       const stream = new ReadableStream(
         {
           type: 'bytes',
-          start: (controller): ?Promise<void> => {
-            startWork(request);
-          },
           pull: (controller): ?Promise<void> => {
             startFlowing(request, controller);
           },
@@ -145,10 +222,11 @@ export function prerender(
       onFatalError,
       options ? options.onError : undefined,
       options ? options.identifierPrefix : undefined,
-      options ? options.onPostpone : undefined,
       options ? options.temporaryReferences : undefined,
+      options ? options.startTime : undefined,
       __DEV__ && options ? options.environmentName : undefined,
       __DEV__ && options ? options.filterStackFrame : undefined,
+      false,
     );
     if (options && options.signal) {
       const signal = options.signal;
@@ -168,7 +246,7 @@ export function prerender(
   });
 }
 
-let serverManifest = {};
+let serverManifest: ServerManifest = {};
 export function registerServerActions(manifest: ServerManifest) {
   // This function is called by the bundler to register the manifest.
   serverManifest = manifest;
@@ -176,7 +254,10 @@ export function registerServerActions(manifest: ServerManifest) {
 
 export function decodeReply<T>(
   body: string | FormData,
-  options?: {temporaryReferences?: TemporaryReferenceSet},
+  options?: {
+    temporaryReferences?: TemporaryReferenceSet,
+    arraySizeLimit?: number,
+  },
 ): Thenable<T> {
   if (typeof body === 'string') {
     const form = new FormData();
@@ -188,6 +269,7 @@ export function decodeReply<T>(
     '',
     options ? options.temporaryReferences : undefined,
     body,
+    options ? options.arraySizeLimit : undefined,
   );
   const root = getRoot<T>(response);
   close(response);
