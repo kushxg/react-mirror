@@ -249,6 +249,7 @@ function applyTextProps(instance, props, prevProps = {}) {
   }
 }
 
+export * from 'react-reconciler/src/ReactFiberConfigWithNoViewTransition';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoPersistence';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoHydration';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoScopes';
@@ -484,85 +485,6 @@ export function unhideTextInstance(textInstance, text): void {
   // Noop
 }
 
-export function applyViewTransitionName(instance, name, className) {
-  // Noop
-}
-
-export function restoreViewTransitionName(instance, props) {
-  // Noop
-}
-
-export function cancelViewTransitionName(instance, name, props) {
-  // Noop
-}
-
-export function cancelRootViewTransitionName(rootContainer) {
-  // Noop
-}
-
-export function restoreRootViewTransitionName(rootContainer) {
-  // Noop
-}
-
-export function cloneRootViewTransitionContainer(rootContainer) {
-  throw new Error('Not implemented.');
-}
-
-export function removeRootViewTransitionClone(rootContainer, clone) {
-  throw new Error('Not implemented.');
-}
-
-export type InstanceMeasurement = null;
-
-export function measureInstance(instance) {
-  return null;
-}
-
-export function measureClonedInstance(instance) {
-  return null;
-}
-
-export function wasInstanceInViewport(measurement): boolean {
-  return true;
-}
-
-export function hasInstanceChanged(oldMeasurement, newMeasurement): boolean {
-  return false;
-}
-
-export function hasInstanceAffectedParent(
-  oldMeasurement,
-  newMeasurement,
-): boolean {
-  return false;
-}
-
-export function startViewTransition() {
-  return null;
-}
-
-export type RunningViewTransition = null;
-
-export function startGestureTransition() {
-  return null;
-}
-
-export function stopViewTransition(transition: RunningViewTransition) {}
-
-export type ViewTransitionInstance = null | {name: string, ...};
-
-export function createViewTransitionInstance(
-  name: string,
-): ViewTransitionInstance {
-  return null;
-}
-
-export type GestureTimeline = null;
-
-export function getCurrentGestureOffset(provider: GestureTimeline): number {
-  throw new Error('startGestureTransition is not yet supported in react-art.');
-}
-
 export function clearContainer(container) {
   // TODO Implement this
 }
@@ -609,13 +531,19 @@ export function preloadInstance(type, props) {
   return true;
 }
 
-export function startSuspendingCommit() {}
+export function startSuspendingCommit() {
+  return null;
+}
 
-export function suspendInstance(instance, type, props) {}
+export function suspendInstance(state, instance, type, props) {}
 
-export function suspendOnActiveViewTransition(container) {}
+export function suspendOnActiveViewTransition(state, container) {}
 
-export function waitForCommitToBeReady() {
+export function waitForCommitToBeReady(timeoutOffset) {
+  return null;
+}
+
+export function getSuspendedCommitReason(state, rootContainer) {
   return null;
 }
 

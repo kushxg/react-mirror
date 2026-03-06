@@ -8,13 +8,13 @@
  */
 
 import type {InspectorData, TouchedViewDataAtPoint} from './ReactNativeTypes';
-import type {TransitionTypes} from 'react/src/ReactTransitionType';
 
 // Modules provided by RN:
 import {
   ReactNativeViewConfigRegistry,
   UIManager,
   deepFreezeAndThrowOnMutationInDev,
+  createPublicInstance,
   type PublicRootInstance,
 } from 'react-native/Libraries/ReactPrivate/ReactNativePrivateInterface';
 
@@ -109,6 +109,7 @@ function recursivelyUncacheFiberNode(node: Instance | TextInstance) {
   }
 }
 
+export * from 'react-reconciler/src/ReactFiberConfigWithNoViewTransition';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoPersistence';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoHydration';
 export * from 'react-reconciler/src/ReactFiberConfigWithNoScopes';
@@ -285,8 +286,26 @@ export function getChildHostContext(
 
 export function getPublicInstance(instance: Instance): PublicInstance {
   // $FlowExpectedError[prop-missing] For compatibility with Fabric
-  if (instance.canonical != null && instance.canonical.publicInstance != null) {
-    // $FlowFixMe[incompatible-return]
+  if (instance.canonical != null) {
+    if (instance.canonical.publicInstance == null) {
+      // $FlowExpectedError[incompatible-use]
+      instance.canonical.publicInstance = createPublicInstance(
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.nativeTag,
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.viewConfig,
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.internalInstanceHandle,
+        // $FlowExpectedError[incompatible-use]
+        instance.canonical.publicRootInstance ?? null,
+      );
+      // This was only necessary to create the public instance.
+      // $FlowExpectedError[prop-missing]
+      instance.canonical.publicRootInstance = null;
+    }
+
+    // $FlowExpectedError[prop-missing]
+    // $FlowExpectedError[incompatible-return]
     return instance.canonical.publicInstance;
   }
 
@@ -307,7 +326,7 @@ export const warnsIfNotActing = true;
 
 export const scheduleTimeout = setTimeout;
 export const cancelTimeout = clearTimeout;
-export const noTimeout = -1;
+export const noTimeout: -1 = -1;
 
 export function shouldSetTextContent(type: string, props: Props): boolean {
   // TODO (bvaughn) Revisit this decision.
@@ -569,134 +588,6 @@ export function unhideInstance(instance: Instance, props: Props): void {
   );
 }
 
-export function applyViewTransitionName(
-  instance: Instance,
-  name: string,
-  className: ?string,
-): void {
-  // Not yet implemented
-}
-
-export function restoreViewTransitionName(
-  instance: Instance,
-  props: Props,
-): void {
-  // Not yet implemented
-}
-
-export function cancelViewTransitionName(
-  instance: Instance,
-  name: string,
-  props: Props,
-): void {
-  // Not yet implemented
-}
-
-export function cancelRootViewTransitionName(rootContainer: Container): void {
-  // Not yet implemented
-}
-
-export function restoreRootViewTransitionName(rootContainer: Container): void {
-  // Not yet implemented
-}
-
-export function cloneRootViewTransitionContainer(
-  rootContainer: Container,
-): Instance {
-  throw new Error('Not implemented.');
-}
-
-export function removeRootViewTransitionClone(
-  rootContainer: Container,
-  clone: Instance,
-): void {
-  throw new Error('Not implemented.');
-}
-
-export type InstanceMeasurement = null;
-
-export function measureInstance(instance: Instance): InstanceMeasurement {
-  // This heuristic is better implemented at the native layer.
-  return null;
-}
-
-export function measureClonedInstance(instance: Instance): InstanceMeasurement {
-  return null;
-}
-
-export function wasInstanceInViewport(
-  measurement: InstanceMeasurement,
-): boolean {
-  return true;
-}
-
-export function hasInstanceChanged(
-  oldMeasurement: InstanceMeasurement,
-  newMeasurement: InstanceMeasurement,
-): boolean {
-  return false;
-}
-
-export function hasInstanceAffectedParent(
-  oldMeasurement: InstanceMeasurement,
-  newMeasurement: InstanceMeasurement,
-): boolean {
-  return false;
-}
-
-export function startViewTransition(
-  rootContainer: Container,
-  transitionTypes: null | TransitionTypes,
-  mutationCallback: () => void,
-  layoutCallback: () => void,
-  afterMutationCallback: () => void,
-  spawnedWorkCallback: () => void,
-  passiveCallback: () => mixed,
-  errorCallback: mixed => void,
-): null | RunningViewTransition {
-  mutationCallback();
-  layoutCallback();
-  // Skip afterMutationCallback(). We don't need it since we're not animating.
-  spawnedWorkCallback();
-  // Skip passiveCallback(). Spawned work will schedule a task.
-  return null;
-}
-
-export type RunningViewTransition = null;
-
-export function startGestureTransition(
-  rootContainer: Container,
-  timeline: GestureTimeline,
-  rangeStart: number,
-  rangeEnd: number,
-  transitionTypes: null | TransitionTypes,
-  mutationCallback: () => void,
-  animateCallback: () => void,
-  errorCallback: mixed => void,
-): null | RunningViewTransition {
-  mutationCallback();
-  animateCallback();
-  return null;
-}
-
-export function stopViewTransition(transition: RunningViewTransition) {}
-
-export type ViewTransitionInstance = null | {name: string, ...};
-
-export function createViewTransitionInstance(
-  name: string,
-): ViewTransitionInstance {
-  return null;
-}
-
-export type GestureTimeline = null;
-
-export function getCurrentGestureOffset(provider: GestureTimeline): number {
-  throw new Error(
-    'startGestureTransition is not yet supported in React Native.',
-  );
-}
-
 export function clearContainer(container: Container): void {
   // TODO Implement this for React Native
   // UIManager does not expose a "remove all" type method.
@@ -759,17 +650,35 @@ export function preloadInstance(
   return true;
 }
 
-export function startSuspendingCommit(): void {}
+export opaque type SuspendedState = null;
+
+export function startSuspendingCommit(): SuspendedState {
+  return null;
+}
 
 export function suspendInstance(
+  state: SuspendedState,
   instance: Instance,
   type: Type,
   props: Props,
 ): void {}
 
-export function suspendOnActiveViewTransition(container: Container): void {}
+export function suspendOnActiveViewTransition(
+  state: SuspendedState,
+  container: Container,
+): void {}
 
-export function waitForCommitToBeReady(): null {
+export function waitForCommitToBeReady(
+  state: SuspendedState,
+  timeoutOffset: number,
+): null {
+  return null;
+}
+
+export function getSuspendedCommitReason(
+  state: SuspendedState,
+  rootContainer: Container,
+): null | string {
   return null;
 }
 
